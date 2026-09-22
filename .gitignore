@@ -1,0 +1,5 @@
+__pycache__/
+old/
+
+best_RANDOM_dqn.pth
+best_RANDOM_ppo.pth

@@ -10,11 +10,12 @@ from base_trainer import BasePokerTrainer
 from masked_actor import MaskedActor, Critic, CPUActionActorPolicy
 from utils import RandomOnPolicyAgent, FrozenPPO
 from evaluator_ppo import PPOEvaluator
+import config
 
 class PPOPokerTrainer(BasePokerTrainer):
     def setup_and_train(self):
         # Konfiguracja Ucznia
-        actor_learner = MaskedActor(state_shape=self.observation_size, action_shape=5).to(self.device)
+        actor_learner = MaskedActor(state_shape=self.observation_size, action_shape=config.ACTION_SPACE).to(self.device)
         critic_learner = Critic(state_shape=self.observation_size).to(self.device)
         
         def dist_fn(logits):
@@ -39,8 +40,8 @@ class PPOPokerTrainer(BasePokerTrainer):
         ppo_learner = PPO(
             policy=policy_learner,
             critic=critic_learner,
-            optim=AdamOptimizerFactory(lr=3e-4), # TODO: przemyśleć tą wartość
-            gamma=0.99, # TODO: zobaczyć czy lepiej nie ustawić 0.95
+            optim=AdamOptimizerFactory(lr=config.PPO_LEARNING_RATE), # TODO: przemyśleć tą wartość
+            gamma=config.PPO_GAMMA, # TODO: zobaczyć czy lepiej nie ustawić 0.95
             gae_lambda=0.95,
             vf_coef=0.5,
             ent_coef=0.01,
@@ -49,7 +50,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         )
 
         # Konfiguracja Przeciwników
-        actor_opponent = MaskedActor(state_shape=self.observation_size, action_shape=5).to(self.device)
+        actor_opponent = MaskedActor(state_shape=self.observation_size, action_shape=config.ACTION_SPACE).to(self.device)
         critic_opponent = Critic(state_shape=self.observation_size).to(self.device)
         
         policy_opponent = CPUActionActorPolicy(
@@ -74,7 +75,7 @@ class PPOPokerTrainer(BasePokerTrainer):
             policy=policy_opponent,
             critic=critic_opponent,
             optim=AdamOptimizerFactory(0),
-            gamma=0.99,
+            gamma=config.PPO_GAMMA,
             gae_lambda=0.95,
             max_grad_norm=0.0,
             vf_coef=0.0,
@@ -101,7 +102,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         marl_algo = MultiAgentOnPolicyAlgorithm(algorithms=agents, env=self.env)
 
         # Kolektory
-        buffer = VectorReplayBuffer(2048, len(self.train_envs))
+        buffer = VectorReplayBuffer(config.PPO_BUFFER_SIZE, len(self.train_envs))
         train_collector = Collector(marl_algo, self.train_envs, buffer, exploration_noise=True)
         test_collector = Collector(marl_algo, self.test_envs, exploration_noise=False)
 
@@ -118,10 +119,10 @@ class PPOPokerTrainer(BasePokerTrainer):
             epoch_num_steps=self.steps_per_epoch,
             collection_step_num_env_steps=self.steps_per_epoch,
             update_step_num_repetitions=4,
-            batch_size=256,
+            batch_size=config.PPO_BATCH_SIZE,
             training_collector=train_collector,
             test_collector=test_collector,
-            test_step_num_episodes=10,
+            test_step_num_episodes=config.OPPONENT_UPDATE_INTERVAL,
             training_fn=train_fn,
             test_fn=test_fn,
             save_best_fn=self.save_best_model,
@@ -138,9 +139,9 @@ if __name__ == "__main__":
         algo_name="ppo",
         training_phase="RANDOM",
         evaluator_class=PPOEvaluator,
-        num_train_envs=2, # dla colaba 8
-        num_test_envs=1, # dla colaba 4
-        max_epochs=100,
-        steps_per_epoch=4096 # TODO: raczej trzeba zwiększyć
+        num_train_envs=config.PPO_NUM_TRAIN_ENVS, # dla colaba 8
+        num_test_envs=config.PPO_NUM_TEST_ENVS, # dla colaba 4
+        max_epochs=config.PPO_MAX_EPOCHS,
+        steps_per_epoch=config.PPO_STEPS_PER_EPOCH # TODO: raczej trzeba zwiększyć
     )
     trainer.setup_and_train()

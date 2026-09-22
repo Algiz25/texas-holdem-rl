@@ -3,19 +3,20 @@ import numpy as np
 import torch
 from tianshou.data import Batch
 from pettingzoo_tournament import TexasHoldemTournament 
+import config
 
 action_mapping = {
     0: "FOLD", 1: "CHECK/CALL", 2: "RAISE HALF", 3: "RAISE POT", 4: "ALL IN"
 }
 
 class BasePokerEvaluator:
-    def __init__(self, num_tournaments=10, model_path='model.pth', training_phase="RANDOM"):
+    def __init__(self, num_tournaments=config.NUM_TOURNAMENTS_PER_EVAL, model_path='model.pth', training_phase="RANDOM"):
         self.num_tournaments = num_tournaments
         self.model_path = model_path
         self.training_phase = training_phase
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
-        self.env = TexasHoldemTournament(num_players=4, starting_chips=200, debug=False)
+        self.env = TexasHoldemTournament(num_players=config.NUM_PLAYERS, starting_chips=config.STARTING_CHIPS, debug=False)
         
     def load_policy(self):
         raise NotImplementedError("Subclass must implement abstract method")
@@ -31,7 +32,6 @@ class BasePokerEvaluator:
             'preflop_opportunities': 0, 'vpip_actions': 0, 'pfr_actions': 0,
         }
 
-        max_steps_per_tournament = 1000 
         print(f"\nRozpoczynam ewaluację (Faza: {self.training_phase}) na {self.device}...")
         
         for t in range(self.num_tournaments):
@@ -98,8 +98,8 @@ class BasePokerEvaluator:
                 self.env.step(action)
                 step_count += 1
                 
-                if step_count > max_steps_per_tournament:
-                    print(f"\n[Turniej {t+1}/{self.num_tournaments}] PRZERWANY! Limit {max_steps_per_tournament} kroków.")
+                if step_count > config.MAX_STEPS_PER_TOURNAMENT:
+                    print(f"\n[Turniej {t+1}/{self.num_tournaments}] PRZERWANY! Limit {config.MAX_STEPS_PER_TOURNAMENT} kroków.")
                     break 
                     
             sys.stdout.write(f"\rZakończono turniej {t+1}/{self.num_tournaments} (Kroki: {step_count})")

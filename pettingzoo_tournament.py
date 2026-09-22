@@ -5,6 +5,7 @@ from pettingzoo.utils import agent_selector
 from rlcard.games.limitholdem import PlayerStatus
 from gymnasium.spaces import Box, Discrete
 import random
+import config
 
 action_mapping = {
     0: "fold",
@@ -15,9 +16,7 @@ action_mapping = {
 }
 
 class TexasHoldemTournament(AECEnv):
-    metadata = {'render.modes': ['human'], "name": "texas_holdem_tournament_v0"}
-
-    def __init__(self, num_players=4, starting_chips=200, debug=False):
+    def __init__(self, num_players=config.NUM_PLAYERS, starting_chips=config.STARTING_CHIPS, debug=False):
         super().__init__()
         self.num_players = num_players
         self.starting_chips = starting_chips
@@ -26,8 +25,8 @@ class TexasHoldemTournament(AECEnv):
         self.possible_agents = [f"player_{i}" for i in range(num_players)]
         self.agents = self.possible_agents[:]
 
-        self.observation_size = 68 # Wielkość wekotra obserwacji
-        self.action_spaces = {agent: Discrete(5) for agent in self.possible_agents} 
+        self.observation_size = config.OBSERVATION_SIZE # Wielkość wekotra obserwacji
+        self.action_spaces = {agent: Discrete(config.ACTION_SPACE) for agent in self.possible_agents} 
         self.observation_spaces = {
             agent: Box(low=-np.inf, high=np.inf, shape=(self.observation_size,), dtype=np.float32)  
             for agent in self.possible_agents
@@ -104,14 +103,14 @@ class TexasHoldemTournament(AECEnv):
         if self.terminations.get(agent, False) or agent not in self.active_agents:
             return {
                 "observation": np.zeros(self.observation_size, dtype=np.float32),
-                "action_mask": np.zeros(5, dtype=np.int8)
+                "action_mask": np.zeros(config.ACTION_SPACE, dtype=np.int8)
             }
 
         # Pobieramy stan na podstawie indeksu w aktywnym rozdaniu
         rlcard_idx = self.active_agents.index(agent)
         state = self.rlcard_env.get_state(rlcard_idx)
         
-        action_mask = np.zeros(5, dtype=np.int8)
+        action_mask = np.zeros(config.ACTION_SPACE, dtype=np.int8)
         for action_id in state['legal_actions']:
             action_mask[action_id] = 1
 
