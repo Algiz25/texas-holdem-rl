@@ -4,13 +4,13 @@ from masked_actor import MaskedActor, Critic, CPUActionActorPolicy
 from tianshou.algorithm.optim import AdamOptimizerFactory
 from torch.distributions import Categorical
 from tianshou.algorithm.modelfree.ppo import PPO
+import config
 
 class PPOEvaluator(BasePokerEvaluator):
     def load_policy(self):
-        observation_size = 68
-        actor = MaskedActor(state_shape=observation_size, action_shape=5).to(self.device)
-        critic = Critic(state_shape=observation_size).to(self.device)
-        optim_factory = AdamOptimizerFactory(lr=3e-4)
+        actor = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(self.device)
+        critic = Critic(state_shape=config.OBSERVATION_SIZE).to(self.device)
+        optim_factory = AdamOptimizerFactory(lr=config.PPO_LEARNING_RATE)
 
         def dist_fn(logits):
             return Categorical(logits=logits)
@@ -27,7 +27,7 @@ class PPOEvaluator(BasePokerEvaluator):
             policy=policy,
             critic=critic,
             optim=optim_factory,
-            gamma=0.99,
+            gamma=config.PPO_GAMMA,
             gae_lambda=0.95,
             vf_coef=0.5,
             ent_coef=0.05,

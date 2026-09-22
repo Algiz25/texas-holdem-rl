@@ -2,11 +2,11 @@ import torch
 from evaluator import BasePokerEvaluator
 from masked_actor import MaskedActor
 from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
+import config
 
 class DQNEvaluator(BasePokerEvaluator):
     def load_policy(self):
-        observation_size = 68
-        net = MaskedActor(state_shape=observation_size, action_shape=5).to(self.device)
+        net = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(self.device)
         policy = DiscreteQLearningPolicy(
             model=net,
             action_space=self.env.action_space("player_0"),

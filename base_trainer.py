@@ -2,9 +2,8 @@ import torch
 from tianshou.env import PettingZooEnv, SubprocVectorEnv
 from tianshou.data import Collector, VectorReplayBuffer
 from pettingzoo_tournament import TexasHoldemTournament
+import config
 
-# Wyciągamy funkcję poza klasę - dzięki temu procesy Windowsa
-# mogą ją bez problemu zserializować (spicklować).
 def make_poker_env():
     return PettingZooEnv(TexasHoldemTournament(num_players=4, starting_chips=200))
 
@@ -18,7 +17,7 @@ class BasePokerTrainer:
         self.max_epochs = max_epochs
         self.steps_per_epoch = steps_per_epoch
         self.total_steps = max_epochs * steps_per_epoch
-        self.observation_size = 68
+        self.observation_size = config.OBSERVATION_SIZE
         
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.last_opponent_update = 0
@@ -37,12 +36,12 @@ class BasePokerTrainer:
 
     def run_periodic_opponent_update(self, epoch, learner_policy, opponent_policy):
         """Cykliczna ewaluacja i nadpisywanie wag przeciwników co 10 epok."""
-        if epoch > 0 and epoch % 10 == 0 and epoch != self.last_opponent_update:
+        if epoch > 0 and epoch % config.OPPONENT_UPDATE_INTERVAL == 0 and epoch != self.last_opponent_update:
             model_name = f'{self.training_phase}_{self.algo_name}_{epoch}.pth'
             torch.save(learner_policy.state_dict(), model_name)
             
             # Ewaluacja
-            evaluator = self.evaluator_class(num_tournaments=10, model_path=model_name)
+            evaluator = self.evaluator_class(num_tournaments=config.NUM_TOURNAMENTS_PER_EVAL, model_path=model_name)
             evaluator.evaluate()
 
             # Aktualizacja przeciwników w trybach zaawansowanych
