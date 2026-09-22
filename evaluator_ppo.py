@@ -4,11 +4,9 @@ from masked_actor import MaskedActor, Critic, CPUActionActorPolicy
 from tianshou.algorithm.optim import AdamOptimizerFactory
 from torch.distributions import Categorical
 from tianshou.algorithm.modelfree.ppo import PPO
-from masked_actor import MaskedActor, CPUActionActorPolicy, Critic 
 
 class PPOEvaluator(BasePokerEvaluator):
     def load_policy(self):
-        # Odtworzenie pełnej struktury dla algorytmu PPO
         observation_size = 68
         actor = MaskedActor(state_shape=observation_size, action_shape=5).to(self.device)
         critic = Critic(state_shape=observation_size).to(self.device)
@@ -48,5 +46,5 @@ class PPOEvaluator(BasePokerEvaluator):
             return None
 
 if __name__ == "__main__":
-    ppo_eval = PPOEvaluator(num_tournaments=100, model_path='RANDOM_ppo_100.pth')
+    ppo_eval = PPOEvaluator(num_tournaments=100, model_path='best_ppo_poker.pth', training_phase="RANDOM")
     ppo_eval.evaluate()

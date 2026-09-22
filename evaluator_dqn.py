@@ -5,7 +5,6 @@ from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
 
 class DQNEvaluator(BasePokerEvaluator):
     def load_policy(self):
-        # Struktura specyficzna dla DiscreteQLearningPolicy
         observation_size = 68
         net = MaskedActor(state_shape=observation_size, action_shape=5).to(self.device)
         policy = DiscreteQLearningPolicy(
@@ -25,5 +24,5 @@ class DQNEvaluator(BasePokerEvaluator):
             return None
 
 if __name__ == "__main__":
-    dqn_eval = DQNEvaluator(num_tournaments=100, model_path='best_dqn_poker.pth')
+    dqn_eval = DQNEvaluator(num_tournaments=100, model_path='best_dqn_poker.pth', training_phase="RANDOM")
     dqn_eval.evaluate()

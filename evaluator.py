@@ -2,25 +2,22 @@ import sys
 import numpy as np
 import torch
 from tianshou.data import Batch
-from pettingzoo_tournament import TexasHoldemTournament
+from pettingzoo_tournament import TexasHoldemTournament 
 
 action_mapping = {
     0: "FOLD", 1: "CHECK/CALL", 2: "RAISE HALF", 3: "RAISE POT", 4: "ALL IN"
 }
 
 class BasePokerEvaluator:
-    def __init__(self, num_tournaments=10, model_path='model.pth'):
+    def __init__(self, num_tournaments=10, model_path='model.pth', training_phase="RANDOM"):
         self.num_tournaments = num_tournaments
         self.model_path = model_path
+        self.training_phase = training_phase
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        # Inicjalizacja środowiska z wymiarami z plików DQN i PPO[cite: 1, 2]
+        
         self.env = TexasHoldemTournament(num_players=4, starting_chips=200, debug=False)
         
     def load_policy(self):
-        """
-        Metoda do nadpisania. Powinna załadować wagi i zwrócić
-        obiekt polityki, który przyjmuje 'batch' i zwraca akcję.
-        """
         raise NotImplementedError("Subclass must implement abstract method")
 
     def evaluate(self):
@@ -34,9 +31,8 @@ class BasePokerEvaluator:
             'preflop_opportunities': 0, 'vpip_actions': 0, 'pfr_actions': 0,
         }
 
-        # Zabezpieczenie przed nieskończonym foldowaniem[cite: 1, 2]
         max_steps_per_tournament = 1000 
-        print(f"\nRozpoczynam ewaluację na {self.device}...")
+        print(f"\nRozpoczynam ewaluację (Faza: {self.training_phase}) na {self.device}...")
         
         for t in range(self.num_tournaments):
             self.env.reset()
@@ -52,6 +48,7 @@ class BasePokerEvaluator:
                     
                 obs = observation['observation']
                 mask = observation['action_mask']
+                legal_actions = [i for i, valid in enumerate(mask) if valid == 1]
                 
                 batch = Batch(
                     obs=Batch(
@@ -61,34 +58,42 @@ class BasePokerEvaluator:
                     info={}
                 )
                 
-                # AGENT + 3 losowych graczy
-                if agent == "player_0":
+                # --- LOGIKA WYBORU AKCJI (ŚRODOWISKO ZALEŻNE OD FAZY) ---
+                # przeciwnicy będą grać tym samym mózgiem w self i advanced
+                is_learner = (agent == "player_0")
+                is_opponent_self = (agent in ["player_1", "player_2", "player_3"] and self.training_phase == "SELF") or \
+                                   (agent in ["player_1", "player_3"] and self.training_phase == "ADVANCED")
+                
+                if is_learner or is_opponent_self:
                     result = policy(batch)
                     action = int(result.act[0])
+                    # Zabezpieczenie przed błędem wczesnego PPO (niedozwolona akcja)
+                    if mask[action] == 0:
+                        action = 0 if mask[0] == 1 else np.random.choice(legal_actions)
                 else:
-                    # Dla pozostałych graczy wybieramy losową dozwoloną akcję
-                    legal_actions = [i for i, valid in enumerate(mask) if valid == 1]
+                    # Pozostali agenci grają losowo
                     action = int(np.random.choice(legal_actions))
                 
-                # --- AKTUALIZACJA STATYSTYK ---[cite: 1, 2]
-                stats['total_actions'] += 1
-                if action == 0:
-                    stats['folds'] += 1
-                elif action == 1:
-                    stats['calls'] += 1
-                elif action in [2, 3, 4]:
-                    stats['raises'] += 1
+                # --- AKTUALIZACJA STATYSTYK (tylko dla ucznia) ---
+                if is_learner:
+                    stats['total_actions'] += 1
+                    if action == 0:
+                        stats['folds'] += 1
+                    elif action == 1:
+                        stats['calls'] += 1
+                    elif action in [2, 3, 4]:
+                        stats['raises'] += 1
+                        
+                    is_preflop = (obs[55] == 1.0)
+                    if is_preflop:
+                        stats['preflop_opportunities'] += 1
+                        if action != 0:
+                            stats['vpip_actions'] += 1
+                        if action in [2, 3, 4]:
+                            stats['pfr_actions'] += 1
                     
-                is_preflop = (obs[55] == 1.0)
-                if is_preflop:
-                    stats['preflop_opportunities'] += 1
-                    if action != 0:
-                        stats['vpip_actions'] += 1
-                    if action in [2, 3, 4]:
-                        stats['pfr_actions'] += 1
-                
-                if step_count < 15:
-                    tournament_actions.append(action_mapping[action])
+                    if step_count < 15:
+                        tournament_actions.append(action_mapping[action])
 
                 self.env.step(action)
                 step_count += 1
@@ -100,9 +105,8 @@ class BasePokerEvaluator:
             sys.stdout.write(f"\rZakończono turniej {t+1}/{self.num_tournaments} (Kroki: {step_count})")
             sys.stdout.flush()
             
-            # Podgląd pierwszych akcji w turnieju[cite: 1, 2]
             if t == 0:
-                print(f"\n[Podgląd] Pierwsze 15 decyzji agentów w turnieju 1:\n -> {', '.join(tournament_actions)}\n")
+                print(f"\n[Podgląd] Pierwsze decyzje badanego gracza:\n -> {', '.join(tournament_actions)}\n")
 
             winner = max(self.env.tournament_chips, key=self.env.tournament_chips.get)
             if winner == "player_0":
@@ -113,7 +117,7 @@ class BasePokerEvaluator:
     def _print_results(self, wins, stats):
         win_rate = (wins / self.num_tournaments) * 100
         print("\n\n=== WYNIKI EWALUACJI ===")
-        print(f"Suma wszystkich podjętych decyzji: {stats['total_actions']}")
+        print(f"Suma podjętych decyzji gracza 0: {stats['total_actions']}")
         print(f"Win Rate: {win_rate:.1f}%")
         
         if stats['total_actions'] > 0:
@@ -128,5 +132,3 @@ class BasePokerEvaluator:
             pfr = stats['pfr_actions'] / stats['preflop_opportunities'] * 100
             print(f"VPIP (Voluntarily Put in Pot): {vpip:.1f}%")
             print(f"PFR (Pre-Flop Raise):          {pfr:.1f}%")
-
-
