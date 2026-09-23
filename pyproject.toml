@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "texas-holdem-rl"
+version = "0.1.0"
+description = "Multi-agent reinforcement learning for no-limit Texas Hold'em"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "gymnasium",
+  "numpy",
+  "pettingzoo",
+  "pyyaml",
+  "rlcard",
+  "tianshou",
+  "torch",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -5,7 +5,7 @@ from pettingzoo.utils import agent_selector
 from rlcard.games.limitholdem import PlayerStatus
 from gymnasium.spaces import Box, Discrete
 import random
-import config
+from . import config
 
 action_mapping = {
     0: "fold",

@@ -1,5 +1,30 @@
+# Python caches and build output
 __pycache__/
-old/
+*.py[cod]
+build/
+dist/
+*.egg-info/
 
-best_RANDOM_dqn.pth
-best_RANDOM_ppo.pth
+# Local Python environments
+.venv/
+venv/
+env/
+.conda/
+
+# Environment variables and local overrides
+.env
+.env.*
+!.env.example
+
+# Editors and operating-system files
+.idea/
+.vscode/
+.DS_Store
+
+# Training output and model checkpoints
+*.pth
+*.pt
+*.ckpt
+runs/
+logs/
+old/

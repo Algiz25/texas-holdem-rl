@@ -2,8 +2,8 @@ import sys
 import numpy as np
 import torch
 from tianshou.data import Batch
-from pettingzoo_tournament import TexasHoldemTournament 
-import config
+from .. import config
+from ..environment import TexasHoldemTournament
 
 action_mapping = {
     0: "FOLD", 1: "CHECK/CALL", 2: "RAISE HALF", 3: "RAISE POT", 4: "ALL IN"

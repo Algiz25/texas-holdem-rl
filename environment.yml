@@ -1,0 +1,17 @@
+name: texas-holdem-rl
+
+channels:
+  - pytorch
+  - conda-forge
+
+dependencies:
+  - python=3.12
+  - pip
+  - numpy
+  - pytorch
+  - pip:
+      - gymnasium
+      - pettingzoo
+      - pyyaml
+      - rlcard
+      - tianshou
