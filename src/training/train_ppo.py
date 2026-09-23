@@ -10,7 +10,8 @@ import config
 from training.base_trainer import BasePokerTrainer
 from evaluation.evaluator_ppo import PPOEvaluator
 from models import MaskedActor, Critic, CPUActionActorPolicy
-from opponents import RandomOnPolicyAgent, FrozenPPO
+from phases import DynamicOpponentAlgorithm, ShuffleOpponentsHook
+from opponents import RandomOnPolicyAgent, FrozenPPO, PassiveAlgorithm, AggressiveAlgorithm, SeededMixedAlgorithm
 from paths import PPO_CHECKPOINT_DIR
 
 class PPOPokerTrainer(BasePokerTrainer):
@@ -32,7 +33,6 @@ class PPOPokerTrainer(BasePokerTrainer):
 
         if self.training_phase in ["SELF", "ADVANCED"]:
             try:
-                #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do ucznia
                 policy_learner.load_state_dict(torch.load(PPO_CHECKPOINT_DIR / 'final.pth', map_location=self.device, weights_only=True))
                 print("Wczytano wagi ucznia z poprzedniej fazy!")
             except FileNotFoundError:
@@ -63,6 +63,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         )
 
         # Oszczędza zasoby
+        # TODO: trzeba to dodać dla dqn jeśli działa
         policy_opponent.eval()
         critic_opponent.eval()
 
@@ -85,27 +86,61 @@ class PPOPokerTrainer(BasePokerTrainer):
         )
 
         try:
-            #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do przeciwnika
             frozen_opponent.policy.load_state_dict(torch.load(PPO_CHECKPOINT_DIR / 'best.pth', map_location=self.device, weights_only=True))
         except FileNotFoundError:
             pass
 
+        # Inne agenty
         random_agent = RandomOnPolicyAgent(action_space=self.env.action_space)
+        passive_agent = PassiveAlgorithm(action_space=self.env.action_space)
+        aggressive_agent = AggressiveAlgorithm(action_space=self.env.action_space)
+        mixed_agent = SeededMixedAlgorithm(action_space=self.env.action_space, seed=12345)
 
-        # 3. Złożenie algorytmu MARL
-        if self.training_phase == "RANDOM":
-            agents = [ppo_learner, random_agent, random_agent, random_agent]
-        elif self.training_phase == "SELF":
-            agents = [ppo_learner, frozen_opponent, frozen_opponent, frozen_opponent]
-        elif self.training_phase == "ADVANCED":
-            agents = [ppo_learner, frozen_opponent, random_agent, frozen_opponent]
+        # Złożenie algorytmu MARL
+
+        if self.training_phase == 1:
+            available_opponents = {
+                "random": random_agent.policy,
+                "passive": passive_agent.policy,
+                "mixed": mixed_agent.policy
+            }
+
+            # 50% random, 40% passive, 10% mixed
+            opponent_weights = {
+                "random": 0.50,
+                "passive": 0.40,
+                "mixed": 0.10
+            }
+
+            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+
+            agents = [ppo_learner, opponent_1, opponent_2, opponent_3]
+        # TODO: trzeba zdefiniować inne fazy
+        else:
+            print("Nie ma takiej fazy")
 
         marl_algo = MultiAgentOnPolicyAlgorithm(algorithms=agents, env=self.env)
 
+        shuffle_hook = ShuffleOpponentsHook(opponent_1, opponent_2, opponent_3)
+
         # Kolektory
         buffer = VectorReplayBuffer(config.PPO_BUFFER_SIZE, len(self.train_envs))
-        train_collector = Collector(marl_algo, self.train_envs, buffer, exploration_noise=True)
-        test_collector = Collector(marl_algo, self.test_envs, exploration_noise=False)
+        train_collector = Collector(
+            marl_algo, 
+            self.train_envs, 
+            buffer, 
+            exploration_noise=True, 
+            on_episode_done_hook=shuffle_hook
+        )
+
+        test_collector = Collector(
+            marl_algo, 
+            self.test_envs, 
+            exploration_noise=False, 
+            on_episode_done_hook=shuffle_hook
+        )
 
         # Funkcje trenujące z logiką PPO
         def train_fn(epoch, env_step):
@@ -114,7 +149,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         def test_fn(epoch, env_step):
             pass
 
-        # 6. Trener
+        # Trener
         trainer_params = OnPolicyTrainerParams(
             max_epochs=self.max_epochs,
             epoch_num_steps=self.steps_per_epoch,
@@ -138,10 +173,10 @@ class PPOPokerTrainer(BasePokerTrainer):
 if __name__ == "__main__":
     trainer = PPOPokerTrainer(
         algo_name="ppo",
-        training_phase="RANDOM",
+        training_phase=config.TRAINING_PHASE,
         evaluator_class=PPOEvaluator,
-        num_train_envs=config.PPO_NUM_TRAIN_ENVS, # dla colaba 8
-        num_test_envs=config.PPO_NUM_TEST_ENVS, # dla colaba 4
+        num_train_envs=config.PPO_NUM_TRAIN_ENVS,
+        num_test_envs=config.PPO_NUM_TEST_ENVS,
         max_epochs=config.PPO_MAX_EPOCHS,
         steps_per_epoch=config.PPO_STEPS_PER_EPOCH # TODO: raczej trzeba zwiększyć
     )
