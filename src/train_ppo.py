@@ -6,12 +6,12 @@ from tianshou.algorithm.multiagent.marl import MultiAgentOnPolicyAlgorithm
 from tianshou.trainer import OnPolicyTrainer, OnPolicyTrainerParams
 from tianshou.algorithm.optim import AdamOptimizerFactory
 
-from .. import config
-from ..evaluation.ppo import PPOEvaluator
-from ..models import MaskedActor, Critic, CPUActionActorPolicy
-from ..opponents import RandomOnPolicyAgent, FrozenPPO
-from ..paths import PPO_CHECKPOINT_DIR
-from .base import BasePokerTrainer
+import config
+from base_trainer import BasePokerTrainer
+from evaluator_ppo import PPOEvaluator
+from models import MaskedActor, Critic, CPUActionActorPolicy
+from opponents import RandomOnPolicyAgent, FrozenPPO
+from paths import PPO_CHECKPOINT_DIR
 
 class PPOPokerTrainer(BasePokerTrainer):
     def setup_and_train(self):

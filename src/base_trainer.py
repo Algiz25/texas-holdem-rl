@@ -1,9 +1,9 @@
 import torch
 from tianshou.env import PettingZooEnv, SubprocVectorEnv
 from tianshou.data import Collector, VectorReplayBuffer
-from .. import config
-from ..environment import TexasHoldemTournament
-from ..paths import DQN_CHECKPOINT_DIR, PPO_CHECKPOINT_DIR, ensure_output_directories
+import config
+from environment import TexasHoldemTournament
+from paths import DQN_CHECKPOINT_DIR, PPO_CHECKPOINT_DIR, ensure_output_directories
 
 def make_poker_env():
     return PettingZooEnv(TexasHoldemTournament(num_players=4, starting_chips=200))

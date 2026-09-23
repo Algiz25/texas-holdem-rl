@@ -10,12 +10,12 @@ The current implemented observation vector has 68 values and the action space ha
 
 - `checkpoints/`: local `.pth` model weights, split by algorithm.
 - `runs/`: local logs and experiment metrics; automatic run logging is not implemented yet.
-- `src/texas_holdem_rl/environment.py`: RLCard/PettingZoo tournament environment and observation construction.
-- `src/texas_holdem_rl/config.py`: environment, DQN, PPO, and evaluation parameters.
-- `src/texas_holdem_rl/models.py`: actor, critic, and policy wrappers.
-- `src/texas_holdem_rl/opponents.py`: random, heuristic, and frozen opponents.
-- `src/texas_holdem_rl/training/`: DQN and PPO training entry points.
-- `src/texas_holdem_rl/evaluation/`: shared and algorithm-specific evaluators.
+- `src/environment.py`: RLCard/PettingZoo tournament environment and observation construction.
+- `src/config.py`: environment, DQN, PPO, and evaluation parameters.
+- `src/models.py`: actor, critic, and policy wrappers.
+- `src/opponents.py`: random, heuristic, and frozen opponents.
+- `src/train_dqn.py` and `src/train_ppo.py`: training entry points.
+- `src/evaluator.py`, `src/evaluator_dqn.py`, and `src/evaluator_ppo.py`: model evaluation.
 - `tests/`: environment and model tests.
 
 ## Environment setup
@@ -25,7 +25,7 @@ Use Python 3.12 and the project-local virtual environment:
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -r requirements.txt
 ```
 
 Do not add generated virtual-environment contents to Git.
@@ -36,14 +36,14 @@ Run these checks after code changes:
 
 ```bash
 .venv/bin/python -m compileall -q src tests
-.venv/bin/python -m unittest discover -s tests -v
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 git diff --check
 ```
 
 For import and configuration changes, also verify:
 
 ```bash
-.venv/bin/python -c "import texas_holdem_rl.config"
+PYTHONPATH=src .venv/bin/python -c "import config"
 ```
 
 Do not start a full DQN or PPO training run merely as a validation step. Training is long-running and writes checkpoints. Import the modules and test small components instead unless a training run is explicitly requested.
@@ -51,17 +51,17 @@ Do not start a full DQN or PPO training run merely as a validation step. Trainin
 ## Running the project
 
 ```bash
-python -m texas_holdem_rl.training.dqn
-python -m texas_holdem_rl.training.ppo
-python -m texas_holdem_rl.evaluation.dqn
-python -m texas_holdem_rl.evaluation.ppo
+python src/train_dqn.py
+python src/train_ppo.py
+python src/evaluator_dqn.py
+python src/evaluator_ppo.py
 ```
 
-Training settings belong in `src/texas_holdem_rl/config.py`, not as new hard-coded constants in training modules.
+Training settings belong in `src/config.py`, not as new hard-coded constants in training modules.
 
 ## Coding conventions
 
-- Use package imports rooted at `texas_holdem_rl`; do not restore imports from the old flat `src` layout.
+- Keep imports consistent with the flat `src/` layout.
 - Keep environment mechanics and observation encoding in `environment.py`.
 - Keep neural-network definitions in `models.py`.
 - Keep training orchestration separate from evaluation.

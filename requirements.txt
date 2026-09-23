@@ -1,7 +1,6 @@
 gymnasium
 numpy
 pettingzoo
-pyyaml
 rlcard
 tianshou
 torch

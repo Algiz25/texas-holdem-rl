@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from texas_holdem_rl.environment import TexasHoldemTournament
+from environment import TexasHoldemTournament
 
 
 class TexasHoldemTournamentTest(unittest.TestCase):

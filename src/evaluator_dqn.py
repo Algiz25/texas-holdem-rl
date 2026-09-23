@@ -1,9 +1,9 @@
 import torch
-from .base import BasePokerEvaluator
-from ..models import MaskedActor
-from ..paths import DQN_CHECKPOINT_DIR
+from evaluator import BasePokerEvaluator
+from models import MaskedActor
+from paths import DQN_CHECKPOINT_DIR
 from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
-from .. import config
+import config
 
 class DQNEvaluator(BasePokerEvaluator):
     def load_policy(self):

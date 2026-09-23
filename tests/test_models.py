@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import torch
 
-from texas_holdem_rl.models import Critic, MaskedActor
+from models import Critic, MaskedActor
 
 
 class PokerModelsTest(unittest.TestCase):

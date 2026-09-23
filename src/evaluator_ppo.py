@@ -1,11 +1,11 @@
 import torch
-from .base import BasePokerEvaluator
-from ..models import MaskedActor, Critic, CPUActionActorPolicy
-from ..paths import PPO_CHECKPOINT_DIR
+from evaluator import BasePokerEvaluator
+from models import MaskedActor, Critic, CPUActionActorPolicy
+from paths import PPO_CHECKPOINT_DIR
 from tianshou.algorithm.optim import AdamOptimizerFactory
 from torch.distributions import Categorical
 from tianshou.algorithm.modelfree.ppo import PPO
-from .. import config
+import config
 
 class PPOEvaluator(BasePokerEvaluator):
     def load_policy(self):

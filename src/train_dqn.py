@@ -6,12 +6,12 @@ from tianshou.algorithm.random import MARLRandomDiscreteMaskedOffPolicyAlgorithm
 from tianshou.trainer import OffPolicyTrainer, OffPolicyTrainerParams
 from tianshou.algorithm.optim import AdamOptimizerFactory
 
-from .. import config
-from ..evaluation.dqn import DQNEvaluator
-from ..models import MaskedActor
-from ..opponents import FrozenDQN
-from ..paths import DQN_CHECKPOINT_DIR
-from .base import BasePokerTrainer
+import config
+from base_trainer import BasePokerTrainer
+from evaluator_dqn import DQNEvaluator
+from models import MaskedActor
+from opponents import FrozenDQN
+from paths import DQN_CHECKPOINT_DIR
 
 class DQNPokerTrainer(BasePokerTrainer):
     def setup_and_train(self):

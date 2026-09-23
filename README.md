@@ -7,15 +7,7 @@ Projekt środowiska turniejowego Texas Hold'em oraz agentów reinforcement learn
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e .
-```
-
-Alternatywnie można utworzyć środowisko Conda:
-
-```bash
-conda env create -f environment.yml
-conda activate texas-holdem-rl
-pip install -e .
+pip install -r requirements.txt
 ```
 
 ## Struktura
@@ -23,23 +15,26 @@ pip install -e .
 ```text
 checkpoints/                lokalne checkpointy modeli
 runs/                       logi i wyniki eksperymentów
-src/texas_holdem_rl/
+src/
   config.py                 parametry środowiska, treningu i ewaluacji
   environment.py            środowisko PettingZoo/RLCard
   models.py                 sieci Actor i Critic
   opponents.py              losowi, heurystyczni i zamrożeni przeciwnicy
-  training/                 trening DQN i PPO
-  evaluation/               ewaluacja modeli
+  train_dqn.py              trening DQN
+  train_ppo.py              trening PPO
+  evaluator.py              wspólna logika ewaluacji
+  evaluator_dqn.py          ewaluacja DQN
+  evaluator_ppo.py          ewaluacja PPO
 tests/                      testy środowiska i modeli
 ```
 
 ## Trening
 
-Parametry środowiska, DQN i PPO zmienia się w `src/texas_holdem_rl/config.py`.
+Parametry środowiska, DQN i PPO zmienia się w `src/config.py`.
 
 ```bash
-python -m texas_holdem_rl.training.dqn
-python -m texas_holdem_rl.training.ppo
+python src/train_dqn.py
+python src/train_ppo.py
 ```
 
 Checkpointy są zapisywane niezależnie od katalogu uruchomienia:
@@ -54,12 +49,12 @@ checkpoints/ppo/final.pth
 ## Ewaluacja
 
 ```bash
-python -m texas_holdem_rl.evaluation.dqn
-python -m texas_holdem_rl.evaluation.ppo
+python src/evaluator_dqn.py
+python src/evaluator_ppo.py
 ```
 
 ## Testy
 
 ```bash
-python -m unittest discover -s tests
+PYTHONPATH=src python -m unittest discover -s tests
 ```
