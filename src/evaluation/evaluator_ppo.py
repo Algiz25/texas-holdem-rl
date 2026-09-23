@@ -1,5 +1,5 @@
 import torch
-from evaluator import BasePokerEvaluator
+from evaluation.evaluator import BasePokerEvaluator
 from models import MaskedActor, Critic, CPUActionActorPolicy
 from paths import PPO_CHECKPOINT_DIR
 from tianshou.algorithm.optim import AdamOptimizerFactory

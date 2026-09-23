@@ -19,11 +19,14 @@ src/
   environment.py            środowisko PettingZoo/RLCard
   models.py                 sieci Actor i Critic
   opponents.py              losowi, heurystyczni i zamrożeni przeciwnicy
-  train_dqn.py              trening DQN
-  train_ppo.py              trening PPO
-  evaluator.py              wspólna logika ewaluacji
-  evaluator_dqn.py          ewaluacja DQN
-  evaluator_ppo.py          ewaluacja PPO
+  training/
+    base_trainer.py         wspólna logika treningu
+    train_dqn.py            trening DQN
+    train_ppo.py            trening PPO
+  evaluation/
+    evaluator.py            wspólna logika ewaluacji
+    evaluator_dqn.py        ewaluacja DQN
+    evaluator_ppo.py        ewaluacja PPO
 tests/                      testy środowiska i modeli
 ```
 
@@ -32,8 +35,8 @@ tests/                      testy środowiska i modeli
 Parametry środowiska, DQN i PPO zmienia się w `src/config.py`.
 
 ```bash
-python src/train_dqn.py
-python src/train_ppo.py
+PYTHONPATH=src python src/training/train_dqn.py
+PYTHONPATH=src python src/training/train_ppo.py
 ```
 
 Checkpointy są zapisywane niezależnie od katalogu uruchomienia:
@@ -48,8 +51,8 @@ checkpoints/ppo/final.pth
 ## Ewaluacja
 
 ```bash
-python src/evaluator_dqn.py
-python src/evaluator_ppo.py
+PYTHONPATH=src python src/evaluation/evaluator_dqn.py
+PYTHONPATH=src python src/evaluation/evaluator_ppo.py
 ```
 
 ## Testy

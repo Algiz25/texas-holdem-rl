@@ -7,8 +7,8 @@ from tianshou.trainer import OnPolicyTrainer, OnPolicyTrainerParams
 from tianshou.algorithm.optim import AdamOptimizerFactory
 
 import config
-from base_trainer import BasePokerTrainer
-from evaluator_ppo import PPOEvaluator
+from training.base_trainer import BasePokerTrainer
+from evaluation.evaluator_ppo import PPOEvaluator
 from models import MaskedActor, Critic, CPUActionActorPolicy
 from opponents import RandomOnPolicyAgent, FrozenPPO
 from paths import PPO_CHECKPOINT_DIR
