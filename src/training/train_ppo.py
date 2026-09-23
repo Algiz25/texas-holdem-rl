@@ -6,11 +6,12 @@ from tianshou.algorithm.multiagent.marl import MultiAgentOnPolicyAlgorithm
 from tianshou.trainer import OnPolicyTrainer, OnPolicyTrainerParams
 from tianshou.algorithm.optim import AdamOptimizerFactory
 
-from base_trainer import BasePokerTrainer
-from masked_actor import MaskedActor, Critic, CPUActionActorPolicy
-from utils import RandomOnPolicyAgent, FrozenPPO
-from evaluator_ppo import PPOEvaluator
 import config
+from training.base_trainer import BasePokerTrainer
+from evaluation.evaluator_ppo import PPOEvaluator
+from models import MaskedActor, Critic, CPUActionActorPolicy
+from opponents import RandomOnPolicyAgent, FrozenPPO
+from paths import PPO_CHECKPOINT_DIR
 
 class PPOPokerTrainer(BasePokerTrainer):
     def setup_and_train(self):
@@ -32,10 +33,10 @@ class PPOPokerTrainer(BasePokerTrainer):
         if self.training_phase in ["SELF", "ADVANCED"]:
             try:
                 #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do ucznia
-                policy_learner.load_state_dict(torch.load(f'final_RANDOM_ppo.pth', map_location=self.device, weights_only=True))
+                policy_learner.load_state_dict(torch.load(PPO_CHECKPOINT_DIR / 'final.pth', map_location=self.device, weights_only=True))
                 print("Wczytano wagi ucznia z poprzedniej fazy!")
             except FileNotFoundError:
-                print("Brak pliku 'final_RANDOM_ppo.pth' dla ucznia, start od zera.")
+                print("Brak końcowego modelu PPO dla ucznia, start od zera.")
         
         ppo_learner = PPO(
             policy=policy_learner,
@@ -85,7 +86,7 @@ class PPOPokerTrainer(BasePokerTrainer):
 
         try:
             #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do przeciwnika
-            frozen_opponent.policy.load_state_dict(torch.load(f'best_{self.training_phase}_ppo.pth', map_location=self.device, weights_only=True))
+            frozen_opponent.policy.load_state_dict(torch.load(PPO_CHECKPOINT_DIR / 'best.pth', map_location=self.device, weights_only=True))
         except FileNotFoundError:
             pass
 
@@ -132,7 +133,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         print("Rozpoczęcie treningu PPO...")
         result = OnPolicyTrainer(algorithm=marl_algo, params=trainer_params).run()
         print(f"\n=== Trening PPO Zakończony ===\nNajlepsza nagroda: {result.best_reward}")
-        torch.save(ppo_learner.policy.state_dict(), f'final_{self.training_phase}_ppo.pth')
+        torch.save(ppo_learner.policy.state_dict(), PPO_CHECKPOINT_DIR / 'final.pth')
 
 if __name__ == "__main__":
     trainer = PPOPokerTrainer(

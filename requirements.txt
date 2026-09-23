@@ -1,0 +1,6 @@
+gymnasium
+numpy
+pettingzoo
+rlcard
+tianshou
+torch

@@ -1,6 +1,7 @@
 import torch
-from evaluator import BasePokerEvaluator
-from masked_actor import MaskedActor, Critic, CPUActionActorPolicy
+from evaluation.evaluator import BasePokerEvaluator
+from models import MaskedActor, Critic, CPUActionActorPolicy
+from paths import PPO_CHECKPOINT_DIR
 from tianshou.algorithm.optim import AdamOptimizerFactory
 from torch.distributions import Categorical
 from tianshou.algorithm.modelfree.ppo import PPO
@@ -46,5 +47,5 @@ class PPOEvaluator(BasePokerEvaluator):
             return None
 
 if __name__ == "__main__":
-    ppo_eval = PPOEvaluator(num_tournaments=100, model_path='best_ppo_poker.pth', training_phase="RANDOM")
+    ppo_eval = PPOEvaluator(num_tournaments=100, model_path=PPO_CHECKPOINT_DIR / 'best.pth', training_phase="RANDOM")
     ppo_eval.evaluate()

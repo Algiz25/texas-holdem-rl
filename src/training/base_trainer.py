@@ -1,8 +1,9 @@
 import torch
 from tianshou.env import PettingZooEnv, SubprocVectorEnv
 from tianshou.data import Collector, VectorReplayBuffer
-from pettingzoo_tournament import TexasHoldemTournament
 import config
+from environment import TexasHoldemTournament
+from paths import DQN_CHECKPOINT_DIR, PPO_CHECKPOINT_DIR, ensure_output_directories
 
 def make_poker_env():
     return PettingZooEnv(TexasHoldemTournament(num_players=4, starting_chips=200))
@@ -21,6 +22,8 @@ class BasePokerTrainer:
         
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.last_opponent_update = 0
+        self.checkpoint_dir = DQN_CHECKPOINT_DIR if algo_name == "dqn" else PPO_CHECKPOINT_DIR
+        ensure_output_directories()
 
         print(f"Inicjalizacja środowisk PettingZoo dla algorytmu {self.algo_name.upper()}...")
         self.env = make_poker_env()
@@ -30,25 +33,29 @@ class BasePokerTrainer:
     def save_best_model(self, algo):
         """Zapisuje model ucznia, gdy testy wykażą najwyższą średnią nagrodę."""
         learner = algo.get_algorithm("player_0")
-        model_name = f"best_{self.training_phase}_{self.algo_name}.pth"
-        torch.save(learner.policy.state_dict(), model_name)
-        print(f"\n[ZAPIS] Zapisano nowy najlepszy model do '{model_name}'")
+        model_path = self.checkpoint_dir / "best.pth"
+        torch.save(learner.policy.state_dict(), model_path)
+        print(f"\n[ZAPIS] Zapisano nowy najlepszy model do '{model_path}'")
 
     def run_periodic_opponent_update(self, epoch, learner_policy, opponent_policy):
         """Cykliczna ewaluacja i nadpisywanie wag przeciwników co 10 epok."""
         if epoch > 0 and epoch % config.OPPONENT_UPDATE_INTERVAL == 0 and epoch != self.last_opponent_update:
-            model_name = f'{self.training_phase}_{self.algo_name}_{epoch}.pth'
-            torch.save(learner_policy.state_dict(), model_name)
+            model_path = self.checkpoint_dir / f'{self.training_phase.lower()}_epoch_{epoch}.pth'
+            torch.save(learner_policy.state_dict(), model_path)
             
             # Ewaluacja
-            evaluator = self.evaluator_class(num_tournaments=config.NUM_TOURNAMENTS_PER_EVAL, model_path=model_name)
+            evaluator = self.evaluator_class(
+                num_tournaments=config.NUM_TOURNAMENTS_PER_EVAL,
+                model_path=model_path,
+                training_phase=self.training_phase,
+            )
             evaluator.evaluate()
 
             # Aktualizacja przeciwników w trybach zaawansowanych
             if self.training_phase in ["SELF", "ADVANCED"]:
                 try:
                     opponent_policy.load_state_dict(
-                        torch.load(model_name, map_location=self.device, weights_only=True)
+                        torch.load(model_path, map_location=self.device, weights_only=True)
                     )
                     print(f"\n---> [EPOKA {epoch}] Przeciwnicy zaktualizowali wagi! <---")
                 except FileNotFoundError:

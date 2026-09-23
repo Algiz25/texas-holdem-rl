@@ -6,11 +6,12 @@ from tianshou.algorithm.random import MARLRandomDiscreteMaskedOffPolicyAlgorithm
 from tianshou.trainer import OffPolicyTrainer, OffPolicyTrainerParams
 from tianshou.algorithm.optim import AdamOptimizerFactory
 
-from base_trainer import BasePokerTrainer
-from masked_actor import MaskedActor
-from utils import FrozenDQN
-from evaluator_dqn import DQNEvaluator
 import config
+from training.base_trainer import BasePokerTrainer
+from evaluation.evaluator_dqn import DQNEvaluator
+from models import MaskedActor
+from opponents import FrozenDQN
+from paths import DQN_CHECKPOINT_DIR
 
 class DQNPokerTrainer(BasePokerTrainer):
     def setup_and_train(self):
@@ -28,10 +29,10 @@ class DQNPokerTrainer(BasePokerTrainer):
         if self.training_phase in ["SELF", "ADVANCED"]:
             try:
                 #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do ucznia
-                policy_learner.load_state_dict(torch.load('final_RANDOM_dqn.pth', map_location=self.device, weights_only=True))
+                policy_learner.load_state_dict(torch.load(DQN_CHECKPOINT_DIR / 'final.pth', map_location=self.device, weights_only=True))
                 print("Wczytano wagi ucznia z poprzedniej fazy!")
             except FileNotFoundError:
-                print("Brak pliku 'final_RANDOM_dqn.pth' dla ucznia, start od zera.")
+                print("Brak końcowego modelu DQN dla ucznia, start od zera.")
         
         dqn_learner = DQN(
             policy=policy_learner,
@@ -66,7 +67,7 @@ class DQNPokerTrainer(BasePokerTrainer):
 
         try:
             #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do przeciwnika
-            frozen_opponent.policy.load_state_dict(torch.load(f'best_{self.training_phase}_ppo.pth', map_location=self.device, weights_only=True))
+            frozen_opponent.policy.load_state_dict(torch.load(DQN_CHECKPOINT_DIR / 'best.pth', map_location=self.device, weights_only=True))
         except FileNotFoundError:
             pass
 
@@ -122,7 +123,7 @@ class DQNPokerTrainer(BasePokerTrainer):
         print("Rozpoczęcie treningu DQN...")
         result = OffPolicyTrainer(algorithm=marl_algo, params=trainer_params).run()
         print(f"\n=== Trening Zakończony ===\nNajlepsza nagroda: {result.best_reward}")
-        torch.save(dqn_learner.policy.state_dict(), 'final_RANDOM_dqn.pth')
+        torch.save(dqn_learner.policy.state_dict(), DQN_CHECKPOINT_DIR / 'final.pth')
 
 if __name__ == "__main__":
     trainer = DQNPokerTrainer(

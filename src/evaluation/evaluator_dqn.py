@@ -1,6 +1,7 @@
 import torch
-from evaluator import BasePokerEvaluator
-from masked_actor import MaskedActor
+from evaluation.evaluator import BasePokerEvaluator
+from models import MaskedActor
+from paths import DQN_CHECKPOINT_DIR
 from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
 import config
 
@@ -24,5 +25,5 @@ class DQNEvaluator(BasePokerEvaluator):
             return None
 
 if __name__ == "__main__":
-    dqn_eval = DQNEvaluator(num_tournaments=100, model_path='best_dqn_poker.pth', training_phase="RANDOM")
+    dqn_eval = DQNEvaluator(num_tournaments=100, model_path=DQN_CHECKPOINT_DIR / 'best.pth', training_phase="RANDOM")
     dqn_eval.evaluate()
