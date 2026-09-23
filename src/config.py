@@ -1,4 +1,6 @@
 # ZMIENNE ŚRODOWISKOWE
+# póki co jedyna dostępna faza to 1
+TRAINING_PHASE = 1
 ACTION_SPACE = 5    # nie zmieniać
 OBSERVATION_SIZE = 68
 STARTING_CHIPS = 200

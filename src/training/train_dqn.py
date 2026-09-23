@@ -10,7 +10,8 @@ import config
 from training.base_trainer import BasePokerTrainer
 from evaluation.evaluator_dqn import DQNEvaluator
 from models import MaskedActor
-from opponents import FrozenDQN
+from opponents import FrozenDQN, PassiveAlgorithm, AggressiveAlgorithm, SeededMixedAlgorithm
+from phases import DynamicOpponentAlgorithm, ShuffleOpponentsHook
 from paths import DQN_CHECKPOINT_DIR
 
 class DQNPokerTrainer(BasePokerTrainer):
@@ -66,27 +67,61 @@ class DQNPokerTrainer(BasePokerTrainer):
         )
 
         try:
-            #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do przeciwnika
             frozen_opponent.policy.load_state_dict(torch.load(DQN_CHECKPOINT_DIR / 'best.pth', map_location=self.device, weights_only=True))
         except FileNotFoundError:
             pass
 
+        # Inne agenty
         random_agent = MARLRandomDiscreteMaskedOffPolicyAlgorithm(action_space=self.env.action_space)
+        passive_agent = PassiveAlgorithm(action_space=self.env.action_space)
+        aggressive_agent = AggressiveAlgorithm(action_space=self.env.action_space)
+        mixed_agent = SeededMixedAlgorithm(action_space=self.env.action_space, seed=12345)
+
 
         # Złożenie środowiska MARL
-        if self.training_phase == "RANDOM":
-            agents = [dqn_learner, random_agent, random_agent, random_agent]
-        elif self.training_phase == "SELF":
-            agents = [dqn_learner, frozen_opponent, frozen_opponent, frozen_opponent]
-        elif self.training_phase == "ADVANCED":
-            agents = [dqn_learner, frozen_opponent, random_agent, frozen_opponent]
+        if self.training_phase == 1:
+            available_opponents = {
+                "random": random_agent.policy,
+                "passive": passive_agent.policy,
+                "mixed": mixed_agent.policy
+            }
+
+            # 50% random, 40% passive, 10% mixed
+            opponent_weights = {
+                "random": 0.50,
+                "passive": 0.40,
+                "mixed": 0.10
+            }
+
+            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+
+            agents = [dqn_learner, opponent_1, opponent_2, opponent_3]
+        # TODO: trzeba zrobić inne fazy treningu
+        else:
+            print("Nie ma takiej fazy")
             
         marl_algo = MultiAgentOffPolicyAlgorithm(algorithms=agents, env=self.env)
 
+        shuffle_hook = ShuffleOpponentsHook(opponent_1, opponent_2, opponent_3)
+
         # Kolektory
         buffer = VectorReplayBuffer(config.DQN_BUFFER_SIZE, len(self.train_envs))
-        train_collector = Collector(marl_algo, self.train_envs, buffer, exploration_noise=True)
-        test_collector = Collector(marl_algo, self.test_envs, exploration_noise=False)
+        train_collector = Collector(
+            marl_algo, 
+            self.train_envs, 
+            buffer, 
+            exploration_noise=True, 
+            on_episode_done_hook=shuffle_hook
+        )
+
+        test_collector = Collector(
+            marl_algo, 
+            self.test_envs, 
+            exploration_noise=False, 
+            on_episode_done_hook=shuffle_hook
+        )
 
         print("Zapełnianie bufora pierwszymi losowymi danymi...")
         train_collector.collect(n_step=config.DQN_BUFFER_WARMUP, random=True, reset_before_collect=True)
@@ -128,10 +163,10 @@ class DQNPokerTrainer(BasePokerTrainer):
 if __name__ == "__main__":
     trainer = DQNPokerTrainer(
         algo_name="dqn",
-        training_phase="RANDOM",
+        training_phase=config.TRAINING_PHASE,
         evaluator_class=DQNEvaluator,
-        num_train_envs=config.DQN_NUM_TRAIN_ENVS, # dla colaba 8
-        num_test_envs=config.DQN_NUM_TEST_ENVS, # dla colaba 4
+        num_train_envs=config.DQN_NUM_TRAIN_ENVS,
+        num_test_envs=config.DQN_NUM_TEST_ENVS,
         max_epochs=config.DQN_MAX_EPOCHS,
         steps_per_epoch=config.DQN_STEPS_PER_EPOCH
     )
