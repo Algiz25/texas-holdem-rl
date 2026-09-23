@@ -14,7 +14,6 @@ pip install -r requirements.txt
 
 ```text
 checkpoints/                lokalne checkpointy modeli
-runs/                       logi i wyniki eksperymentów
 src/
   config.py                 parametry środowiska, treningu i ewaluacji
   environment.py            środowisko PettingZoo/RLCard

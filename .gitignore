@@ -20,11 +20,11 @@ env/
 .idea/
 .vscode/
 .DS_Store
+AGENTS.md
 
 # Training output and model checkpoints
 *.pth
 *.pt
 *.ckpt
-runs/
 logs/
 old/
