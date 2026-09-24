@@ -55,6 +55,11 @@ Osiem środowisk celowo wykorzystuje wszystkie rdzenie komputera. Podczas
 treningu system może reagować wolno, dlatego najlepiej nie wykonywać w tym
 czasie innych obciążających zadań.
 
+Silnik RLCard jest ponownie wykorzystywany pomiędzy rozdaniami i tworzony od
+nowa dopiero po zmianie liczby aktywnych graczy. Nie zmienia to zasad gry ani
+obserwacji, a usuwa koszt konstruowania oraz seedowania całego silnika przy
+każdej kolejnej ręce.
+
 ```bash
 PYTHONPATH=src .venv/bin/python src/training/train_dqn.py
 PYTHONPATH=src .venv/bin/python src/training/train_ppo.py

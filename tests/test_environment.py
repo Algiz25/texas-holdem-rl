@@ -8,6 +8,33 @@ from observation import schema
 
 
 class TexasHoldemTournamentTest(unittest.TestCase):
+    @staticmethod
+    def _deterministic_trace(seed: int, actions: int = 120):
+        env = TexasHoldemTournament(num_players=4, starting_chips=200)
+        env.reset(seed=seed)
+        trace = []
+        completed_actions = 0
+        while completed_actions < actions:
+            observation, reward, terminated, truncated, _ = env.last()
+            if terminated or truncated:
+                env.step(None)
+                if not env.agents:
+                    break
+                continue
+            legal_actions = np.flatnonzero(observation["action_mask"])
+            action = int(legal_actions[0])
+            trace.append(
+                (
+                    env.agent_selection,
+                    observation["observation"].tobytes(),
+                    action,
+                    float(reward),
+                )
+            )
+            env.step(action)
+            completed_actions += 1
+        return trace
+
     def test_each_reset_exposes_a_new_tournament_identifier(self) -> None:
         env = TexasHoldemTournament()
         env.reset(seed=10)
@@ -23,6 +50,46 @@ class TexasHoldemTournamentTest(unittest.TestCase):
                 for info in env.infos.values()
             )
         )
+
+    def test_reused_rlcard_environment_remains_seed_reproducible(self) -> None:
+        first = self._deterministic_trace(seed=123)
+        second = self._deterministic_trace(seed=123)
+        different = self._deterministic_trace(seed=124)
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, different)
+
+    def test_rlcard_environment_is_reused_between_four_player_hands(self) -> None:
+        original_environment = self.env.rlcard_env
+        starting_completed_hands = self.env.completed_hands
+
+        for agent in self.env.agent_iter(max_iter=20):
+            observation, _, terminated, truncated, _ = self.env.last()
+            if terminated or truncated:
+                action = None
+            else:
+                legal_actions = np.flatnonzero(observation["action_mask"])
+                action = (
+                    schema.ACTION_FOLD
+                    if schema.ACTION_FOLD in legal_actions
+                    else int(legal_actions[0])
+                )
+            self.env.step(action)
+            if self.env.completed_hands > starting_completed_hands:
+                break
+
+        self.assertGreater(self.env.completed_hands, starting_completed_hands)
+        self.assertIs(self.env.rlcard_env, original_environment)
+        self.assertEqual(self.env.rlcard_env.game.dealer_id, self.env.dealer_idx)
+
+    def test_rlcard_environment_is_recreated_when_player_count_changes(self) -> None:
+        four_player_environment = self.env.rlcard_env
+
+        self.env._prepare_rlcard_env(num_active=3)
+
+        self.assertIsNot(self.env.rlcard_env, four_player_environment)
+        self.assertEqual(self.env._rlcard_player_count, 3)
+        self.assertEqual(self.env.rlcard_env.num_players, 3)
 
     def setUp(self) -> None:
         self.env = TexasHoldemTournament(num_players=4, starting_chips=200)

@@ -51,6 +51,11 @@ class TexasHoldemTournament(AECEnv):
         # liczeniu układu, drawów, historii i statystyk bez zmiany zwracanych
         # danych. Jest czyszczony po każdej zmianie stanu gry.
         self._observation_cache = {}
+        # RLCard jest relatywnie drogi w konstrukcji. Przechowujemy jedną
+        # instancję dla aktualnej liczby graczy i resetujemy ją między rękami.
+        # Nowa instancja jest potrzebna dopiero po czyimś odpadnięciu.
+        self.rlcard_env = None
+        self._rlcard_player_count = None
 
     def observation_space(self, agent):
         return self.observation_spaces[agent]
@@ -100,18 +105,7 @@ class TexasHoldemTournament(AECEnv):
         # Upewniamy się, że wskaźnik krupiera mieści się w puli pozostałych przy stole graczy
         self.dealer_idx = self.dealer_idx % num_active
         
-        self.rlcard_env = rlcard.make(
-            'no-limit-holdem', 
-            config={
-                'game_num_players': num_active, 
-                'chips_for_each': self.starting_chips, 
-                'dealer_id': self.dealer_idx,
-            }
-        )
-        if self._tournament_seed is not None:
-            # Każde rozdanie dostaje inne, ale powtarzalne ziarno. Samo
-            # utworzenie nowego środowiska RLCard resetowałoby generator.
-            self.rlcard_env.seed(self._tournament_seed + self._hand_number)
+        self._prepare_rlcard_env(num_active)
         self._hand_number += 1
         _, rlcard_player_id = self.rlcard_env.reset()
 
@@ -149,6 +143,46 @@ class TexasHoldemTournament(AECEnv):
 
         # Wskazujemy pierwszego gracza w nowym rozdaniu używając nazwy zmapowanej z RLCard
         self.agent_selection = self.active_agents[rlcard_player_id]
+
+    def _prepare_rlcard_env(self, num_active: int) -> None:
+        """Przygotuj silnik rozdania bez konstruowania go przy każdej ręce.
+
+        `game.configure()` bezpiecznie zmienia button przed `reset()`, ponieważ
+        ten reset odtwarza graczy, talię i rundę licytacji. Liczba graczy jest
+        częścią kształtu środowiska RLCard, więc po eliminacji tworzymy nową
+        instancję. Dla jawnego seedu nowa pula graczy dostaje seed zależny od
+        numeru ręki, dzięki czemu cały turniej pozostaje odtwarzalny.
+        """
+        needs_new_environment = (
+            self.rlcard_env is None
+            or self._rlcard_player_count != num_active
+        )
+        game_config = {
+            "game_num_players": num_active,
+            "chips_for_each": self.starting_chips,
+            "dealer_id": self.dealer_idx,
+        }
+
+        if needs_new_environment:
+            seed = (
+                self._tournament_seed + self._hand_number
+                if self._tournament_seed is not None
+                else None
+            )
+            self.rlcard_env = rlcard.make(
+                "no-limit-holdem",
+                config={**game_config, "seed": seed},
+            )
+            self._rlcard_player_count = num_active
+            return
+
+        self.rlcard_env.game.configure(game_config)
+        if self._tournament_seed is not None:
+            # Ewaluacja historycznie używała `seed + numer ręki`. Zachowujemy
+            # dokładnie tę sekwencję, aby stare i nowe checkpointy dostawały
+            # te same rozdania. Trening bez jawnego seedu pomija ten koszt i
+            # korzysta z ciągłego generatora istniejącej instancji.
+            self.rlcard_env.seed(self._tournament_seed + self._hand_number)
 
     def _street_contributions(self):
         """Zwróć faktyczne, a nie żądane przez RLCard, wpłaty na ulicy."""
