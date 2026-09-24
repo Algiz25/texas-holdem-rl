@@ -41,9 +41,21 @@ class TexasHoldemTournament(AECEnv):
         self.agents = self.possible_agents[:]
 
         self.observation_size = config.OBSERVATION_SIZE # Wielkość wekotra obserwacji
-        self.action_spaces = {agent: Discrete(config.ACTION_SPACE) for agent in self.possible_agents} 
+        self.action_spaces = {
+            agent: Discrete(config.ACTION_SPACE)
+            for agent in self.possible_agents
+        }
         self.observation_spaces = {
-            agent: Box(low=-np.inf, high=np.inf, shape=(self.observation_size,), dtype=np.float32)  
+            # Wszystkie pola 222-elementowego wektora są one-hot, flagami albo
+            # wartościami znormalizowanymi do 0-1. Dokładna przestrzeń pomaga
+            # Gymnasium i kolektorowi wykryć błąd kodowania zamiast akceptować
+            # dowolną wartość nieskończoną.
+            agent: Box(
+                low=0.0,
+                high=1.0,
+                shape=(self.observation_size,),
+                dtype=np.float32,
+            )
             for agent in self.possible_agents
         }
         # PettingZoo pobiera obserwację przez `last()`, a następnie `step()`

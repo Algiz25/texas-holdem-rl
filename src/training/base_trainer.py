@@ -32,6 +32,11 @@ class BasePokerTrainer:
         num_test_envs,
         max_epochs,
         steps_per_epoch,
+        env_factory=make_poker_env,
+        evaluation_interval_steps=config.EVAL_INTERVAL_STEPS,
+        checkpoint_dir=None,
+        train_env_factories=None,
+        test_env_factories=None,
     ):
         self.algo_name = algo_name
         self.training_phase = training_phase
@@ -42,18 +47,39 @@ class BasePokerTrainer:
         self.observation_size = config.OBSERVATION_SIZE
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.checkpoint_dir = (
+        default_checkpoint_dir = (
             DQN_CHECKPOINT_DIR if algo_name == "dqn" else PPO_CHECKPOINT_DIR
         )
-        self.next_evaluation_step = config.EVAL_INTERVAL_STEPS
+        self.checkpoint_dir = checkpoint_dir or default_checkpoint_dir
+        self.evaluation_report_dir = self.checkpoint_dir / "evaluations"
+        # PPO nadal korzysta z wieloagentowego środowiska PettingZoo. DQN może
+        # przekazać jednoagentową fabrykę i własny interwał liczony w decyzjach
+        # ucznia, bez duplikowania wspólnej obsługi checkpointów i ewaluacji.
+        self.evaluation_interval_steps = evaluation_interval_steps
+        self.next_evaluation_step = evaluation_interval_steps
         self.best_validation_score = float("-inf")
         self._existing_checkpoints_preserved = False
         ensure_output_directories()
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.evaluation_report_dir.mkdir(parents=True, exist_ok=True)
+        # Trener DQN może podłączyć writer po utworzeniu nazwanego runu.
+        # Klasa bazowa pozostaje niezależna od TensorBoard i PPO działa bez zmian.
+        self.tensorboard_writer = None
 
-        print(f"Inicjalizacja środowisk PettingZoo dla {self.algo_name.upper()}...")
-        self.env = make_poker_env()
-        self.train_envs = SubprocVectorEnv([make_poker_env for _ in range(num_train_envs)])
-        self.test_envs = SubprocVectorEnv([make_poker_env for _ in range(num_test_envs)])
+        print(f"Inicjalizacja środowisk dla {self.algo_name.upper()}...")
+        self.env = env_factory()
+        train_factories = train_env_factories or [
+            env_factory for _ in range(num_train_envs)
+        ]
+        test_factories = test_env_factories or [
+            env_factory for _ in range(num_test_envs)
+        ]
+        if len(train_factories) != num_train_envs:
+            raise ValueError("Liczba fabryk treningowych nie zgadza się z konfiguracją")
+        if len(test_factories) != num_test_envs:
+            raise ValueError("Liczba fabryk testowych nie zgadza się z konfiguracją")
+        self.train_envs = SubprocVectorEnv(train_factories)
+        self.test_envs = SubprocVectorEnv(test_factories)
 
     @property
     def phase_name(self) -> str:
@@ -67,7 +93,7 @@ class BasePokerTrainer:
         learner_policy,
         opponent_policy=None,
     ) -> None:
-        """Co 100 tys. akcji oceń checkpoint na stałych zestawach rozdań."""
+        """Po skonfigurowanym interwale oceń model na stałych rozdaniach."""
         if env_step < self.next_evaluation_step:
             return
 
@@ -79,6 +105,7 @@ class BasePokerTrainer:
             num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
             model_path=checkpoint_path,
             training_phase=self.training_phase,
+            report_dir=self.evaluation_report_dir,
         )
         results = evaluator.evaluate(
             stage="validation",
@@ -97,6 +124,8 @@ class BasePokerTrainer:
                 f"{phase_result.bb_per_100:.2f} bb/100."
             )
 
+        self._log_evaluation_to_tensorboard(results, "validation", env_step)
+
         # Mechanizm jest gotowy na późniejsze fazy self-play. Faza liczbowa nie
         # wywołuje już błędu `.lower()`, który wcześniej zatrzymywał trening.
         if self.phase_name in {"self", "advanced"} and opponent_policy is not None:
@@ -111,7 +140,7 @@ class BasePokerTrainer:
         # Jeżeli callback został wywołany po przekroczeniu progu, przechodzimy
         # do pierwszego przyszłego punktu zamiast powtarzać tę samą ewaluację.
         while self.next_evaluation_step <= env_step:
-            self.next_evaluation_step += config.EVAL_INTERVAL_STEPS
+            self.next_evaluation_step += self.evaluation_interval_steps
 
     def run_initial_evaluation(self, *, learner_policy) -> None:
         """Zapisz punkt odniesienia przed wykonaniem pierwszej aktualizacji sieci."""
@@ -122,6 +151,7 @@ class BasePokerTrainer:
             num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
             model_path=checkpoint_path,
             training_phase=self.training_phase,
+            report_dir=self.evaluation_report_dir,
         )
         results = evaluator.evaluate(
             stage="baseline_untrained",
@@ -136,6 +166,7 @@ class BasePokerTrainer:
             seed_base=config.EVAL_VALIDATION_SEED,
             learner_mode="random",
         )
+        self._log_evaluation_to_tensorboard(results, "baseline_untrained", 0)
         phase_result = results.get("phase1_mix")
         if phase_result:
             self.best_validation_score = phase_result.bb_per_100
@@ -175,12 +206,14 @@ class BasePokerTrainer:
             num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
             model_path=final_path,
             training_phase=self.training_phase,
+            report_dir=self.evaluation_report_dir,
         )
-        evaluator.evaluate(
+        final_results = evaluator.evaluate(
             stage="final_last",
             step=env_step,
             seed_base=config.EVAL_FINAL_SEED,
         )
+        self._log_evaluation_to_tensorboard(final_results, "final_last", env_step)
 
         # Najlepszy checkpoint walidacyjny może pochodzić ze środka treningu.
         # Oceniamy go na tych samych, nowych seedach co model końcowy, aby ich
@@ -191,12 +224,36 @@ class BasePokerTrainer:
                 num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
                 model_path=best_path,
                 training_phase=self.training_phase,
+                report_dir=self.evaluation_report_dir,
             )
-            best_evaluator.evaluate(
+            best_results = best_evaluator.evaluate(
                 stage="final_best",
                 step=env_step,
                 seed_base=config.EVAL_FINAL_SEED,
             )
+            self._log_evaluation_to_tensorboard(best_results, "final_best", env_step)
+
+    def _log_evaluation_to_tensorboard(self, results, stage: str, step: int) -> None:
+        """Zapisz najważniejsze metryki pokera obok lossu trenera."""
+        if self.tensorboard_writer is None:
+            return
+        for suite, result in results.items():
+            prefix = f"evaluation/{stage}/{suite}"
+            self.tensorboard_writer.add_scalar(
+                f"{prefix}/bb_per_100", result.bb_per_100, step
+            )
+            self.tensorboard_writer.add_scalar(
+                f"{prefix}/mean_chip_delta_per_hand",
+                result.mean_chip_delta_per_hand,
+                step,
+            )
+            self.tensorboard_writer.add_scalar(
+                f"{prefix}/vpip", result.vpip, step
+            )
+            self.tensorboard_writer.add_scalar(
+                f"{prefix}/pfr", result.pfr, step
+            )
+        self.tensorboard_writer.flush()
 
     def setup_and_train(self):
         """Metoda abstrakcyjna implementowana przez trener DQN albo PPO."""

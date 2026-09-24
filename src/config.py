@@ -17,17 +17,20 @@ PHASE1_OPPONENT_WEIGHTS = {
     "mixed": 0.10,
 }
 
+# Rozkład akcji osobowości Mixed jest wspólny dla treningu i ewaluacji.
+# Jedno źródło zapobiega sytuacji, w której bot o tej samej nazwie zachowuje
+# się inaczej podczas zbierania doświadczeń i podczas pomiaru checkpointu.
+MIXED_ACTION_WEIGHTS = (0.20, 0.45, 0.18, 0.12, 0.05)
+
 # ZMIENNE TRENINGOWE
 
 # Krótki test techniczny jest wykonywany przez trenera po każdej epoce. Jeden
 # turniej wystarcza do wykrycia awarii połączenia model–środowisko. Wynik tego
-# testu nie służy do oceny jakości; rzetelna ewaluacja odbywa się niżej co
-# 100 tys. akcji. Poprzednie 10 turniejów na epokę niepotrzebnie dodawało aż
-# 1000 turniejów do milionowego treningu.
+# testu nie służy do oceny jakości; rzetelna ewaluacja używa osobnego interwału.
 EVAL_SMOKE_TOURNAMENTS = 1
 
-# Pełna, porównywalna walidacja uruchamia się co 100 tys. akcji środowiska.
-# Każdy checkpoint gra osobno z trzema zestawami botów i z mieszanką fazy 1.
+# Domyślny interwał zachowujemy dla wieloagentowego PPO. DQN nadpisuje go
+# interwałem liczonym w swoich decyzjach, zdefiniowanym niżej.
 EVAL_INTERVAL_STEPS = 100_000
 EVAL_TOURNAMENTS_PER_SUITE = 50
 
@@ -57,14 +60,14 @@ DQN_TARGET_NET_UPDATE = 5000 # TODO: sprawdzić czy to dobra ilość
 # epsilony
 DQN_EPS_MAX = 1.0
 DQN_RAND_PHASE_EPS_MIN = 0.1
-# Po 720 tys. akcji epsilon osiąga 0.1 i pozostaje na tym poziomie do końca.
-DQN_PHASE1_EPS_DECAY_STEPS = 720_000
+# Po przejściu na jednoagentowy kolektor jeden krok oznacza decyzję ucznia.
+# 180 tys. decyzji odpowiada w przybliżeniu dawnym 720 tys. ruchów całego
+# czteroosobowego stołu. Pozostałe 70 tys. decyzji utrzymuje epsilon 0.1.
+DQN_PHASE1_EPS_DECAY_STEPS = 180_000
 
 DQN_OTHER_PHASE_EPS_MIN = 0.02
 DQN_OTHER_PHASE_EPS_MAX = 0.2
 DQN_OTHER_PHASE_EPS_DECAY = 0.5
-
-DQN_OPONENT_EPS = 0.05
 
 # bufor
 DQN_BUFFER_SIZE = 500_000
@@ -84,12 +87,18 @@ DQN_NUM_TEST_ENVS = 1
 TORCH_NUM_THREADS = 1
 TORCH_NUM_INTEROP_THREADS = 1
 
-DQN_MAX_EPOCHS = 100
+# 250 tys. decyzji ucznia daje zbliżoną liczbę ruchów stołu do poprzedniego
+# eksperymentu liczącego milion akcji wszystkich czterech graczy. Dzięki temu
+# pierwszy poprawiony run można uczciwie porównać czasowo z poprzednim.
+DQN_MAX_EPOCHS = 25
 DQN_STEPS_PER_EPOCH = 10_000
-# Kolektor przeplata 1000 nowych akcji z aktualizacjami sieci. Wartość dzieli
-# 10 000 bez reszty, więc trener kończy dokładnie na milionie, bez nadmiarowych
-# kroków wynikających z domyślnego bloku Tianshou (2048).
+# Kolektor przeplata 1000 nowych decyzji ucznia z aktualizacjami sieci.
+# Wartość dzieli 10 000 bez reszty, więc nie powstają nadmiarowe kroki.
 DQN_COLLECTION_STEPS = 1_000
+
+# Walidacja co 25 tys. decyzji zachowuje dziesięć punktów kontrolnych podczas
+# fazy porównywalnej z dawnym milionem ruchów całego stołu.
+DQN_EVAL_INTERVAL_DECISIONS = 25_000
 
 # ZMIENNE TRENINGOWE PPO
 PPO_LEARNING_RATE = 3e-4 # TODO: sprawdzić czy to dobra ilość

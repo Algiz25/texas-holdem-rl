@@ -1,25 +1,30 @@
 import argparse
 import fcntl
 import os
+import re
 from contextlib import contextmanager
+from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import torch
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 from tianshou.data import Collector, VectorReplayBuffer
 from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
-from tianshou.algorithm.multiagent.marl import MultiAgentOffPolicyAlgorithm
-from tianshou.algorithm.random import MARLRandomDiscreteMaskedOffPolicyAlgorithm
 from tianshou.trainer import OffPolicyTrainer, OffPolicyTrainerParams
 from tianshou.algorithm.optim import AdamOptimizerFactory
+from tianshou.utils import TensorboardLogger
 
 import config
 from training.base_trainer import BasePokerTrainer
+from training.dqn_environment import make_dqn_training_env
 from evaluation.evaluator_dqn import DQNEvaluator
 from models import MaskedActor
-from opponents import FrozenDQN, PassiveAlgorithm, SeededMixedAlgorithm
-from phases import DynamicOpponentAlgorithm
-from paths import DQN_CHECKPOINT_DIR
+from paths import DQN_CHECKPOINT_DIR, dqn_run_dir, tensorboard_run_dir
+
+
+RUN_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
 def save_training_state(dqn: DQN, env_step: int, path: Path) -> None:
@@ -28,10 +33,14 @@ def save_training_state(dqn: DQN, env_step: int, path: Path) -> None:
     Stan algorytmu zawiera sieć ucznia, sieć docelową i optymalizator. Celowo
     nie zapisujemy replay buffera: przy 500 tys. obserwacji zajmowałby setki
     megabajtów. Po wznowieniu bufor jest ponownie rozgrzewany przez 25 tys.
-    akcji, ale wyuczone wagi i momentum optymalizatora pozostają zachowane.
+    decyzji ucznia, ale wagi i momentum optymalizatora pozostają zachowane.
     """
     payload = {
-        "format_version": 1,
+        "format_version": 2,
+        # Od wersji 2 jeden krok oznacza decyzję ucznia, a nie dowolną akcję
+        # przy stole. Jawna jednostka zapobiega cichej kontynuacji starego,
+        # wieloagentowego treningu z nieporównywalnym licznikiem kroków.
+        "step_unit": "learner_decisions",
         "algorithm_state": dqn.state_dict(),
         "algorithm_iteration": dqn._iter,
         "completed_env_steps": env_step,
@@ -66,7 +75,7 @@ def single_training_process():
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 def phase_one_epsilon(env_step: int) -> float:
-    """Liniowo zmniejsz eksplorację z 1.0 do 0.1 przez 720 tys. akcji.
+    """Liniowo zmniejsz eksplorację według liczby decyzji ucznia.
 
     Po osiągnięciu minimum agent nadal losuje 10% decyzji. Zapobiega to zbyt
     wczesnemu przywiązaniu do strategii poznanej głównie na pasywnych botach.
@@ -100,7 +109,7 @@ def ensure_finite_model(model: torch.nn.Module, env_step: int) -> None:
     if invalid_parameters:
         names = ", ".join(invalid_parameters)
         raise FloatingPointError(
-            f"Niestabilny DQN po {env_step:,} akcjach; "
+            f"Niestabilny DQN po {env_step:,} decyzjach ucznia; "
             f"niepoprawne parametry: {names}"
         )
 
@@ -118,11 +127,19 @@ def validate_phase_one_configuration() -> None:
 
 
 class DQNPokerTrainer(BasePokerTrainer):
-    def __init__(self, *args, resume_path: Path | None = None, start_step: int | None = None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        resume_path: Path | None = None,
+        start_step: int | None = None,
+        run_name: str = "dqn",
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.resume_path = resume_path
         self.requested_start_step = start_step
         self.starting_step = 0
+        self.run_name = run_name
 
     def setup_and_train(self):
         # Konfiguracja Ucznia
@@ -136,9 +153,11 @@ class DQNPokerTrainer(BasePokerTrainer):
             eps_inference=0.0
         )
 
-        # Starsze checkpointy zawierają wyłącznie wagi polityki. Pozwalamy je
-        # wykorzystać (także obecny model po 1 mln akcji), choć optymalizator i
-        # sieć docelowa muszą wtedy rozpocząć od świeżego stanu.
+        # Checkpoint zawierający pełny stan może bezpiecznie wznowić tylko nowy
+        # trening jednoagentowy. Stary stan algorytmu powstał z przejść między
+        # różnymi graczami, więc nie wolno kontynuować go pod nowym licznikiem.
+        # Same wagi nadal można jawnie wczytać przez --resume i --start-step,
+        # choć do czystego eksperymentu zalecany jest start od zera.
         resume_payload = None
         if self.resume_path is not None:
             resume_payload = torch.load(
@@ -156,7 +175,7 @@ class DQNPokerTrainer(BasePokerTrainer):
         if self.training_phase in ["SELF", "ADVANCED"]:
             try:
                 #TODO: trzeba zrobić jakiś lepszy system wczytywania modelu do ucznia
-                policy_learner.load_state_dict(torch.load(DQN_CHECKPOINT_DIR / 'final.pth', map_location=self.device, weights_only=True))
+                policy_learner.load_state_dict(torch.load(self.checkpoint_dir / 'final.pth', map_location=self.device, weights_only=True))
                 print("Wczytano wagi ucznia z poprzedniej fazy!")
             except FileNotFoundError:
                 print("Brak końcowego modelu DQN dla ucznia, start od zera.")
@@ -171,6 +190,11 @@ class DQNPokerTrainer(BasePokerTrainer):
 
         if resume_payload is not None:
             if "algorithm_state" in resume_payload:
+                if resume_payload.get("step_unit") != "learner_decisions":
+                    raise ValueError(
+                        "Ten stan treningu pochodzi ze starego kolektora "
+                        "wieloagentowego. Rozpocznij poprawiony trening od zera."
+                    )
                 if resume_payload["observation_size"] != config.OBSERVATION_SIZE:
                     raise ValueError("Checkpoint ma niezgodny rozmiar obserwacji.")
                 if resume_payload["action_space"] != config.ACTION_SPACE:
@@ -183,7 +207,7 @@ class DQNPokerTrainer(BasePokerTrainer):
 
             # Następna ewaluacja przypada na pierwszy pełny próg po kroku, z
             # którego kontynuujemy; nie powtarzamy raportu dla starego modelu.
-            interval = config.EVAL_INTERVAL_STEPS
+            interval = self.evaluation_interval_steps
             self.next_evaluation_step = (
                 self.starting_step // interval + 1
             ) * interval
@@ -192,93 +216,58 @@ class DQNPokerTrainer(BasePokerTrainer):
                 f"'{self.resume_path}'."
             )
 
-        # Konfiguracja Przeciwników
-        net_opponent = MaskedActor(state_shape=self.observation_size, action_shape=config.ACTION_SPACE).to(self.device)
-        policy_opponent = DiscreteQLearningPolicy(
-            model=net_opponent,
-            action_space=self.env.action_space,
-            observation_space=self.env.observation_space,
-            eps_training=config.DQN_OPONENT_EPS,  # mała losowość, żeby nie był bardzo przewidywalny
-            eps_inference=0.0
-        )
-
-        policy_opponent.eval()
-
-        for param in policy_opponent.parameters():
-            param.requires_grad = False
-
-        frozen_opponent = FrozenDQN(
-            policy=policy_opponent,
-            optim=AdamOptimizerFactory(lr=0.0),
-            gamma=config.DQN_GAMMA,
-            n_step_return_horizon=3,
-            target_update_freq=0
-        )
-
-        # W fazie 1 zamrożony model nie jest przeciwnikiem, dlatego nie
-        # wczytujemy starego checkpointu. Dawny model 68-wejściowy nie pasuje
-        # do obecnej sieci z 222 obserwacjami.
-        if self.phase_name in {"self", "advanced"}:
-            try:
-                frozen_opponent.policy.load_state_dict(
-                    torch.load(
-                        DQN_CHECKPOINT_DIR / "best.pth",
-                        map_location=self.device,
-                        weights_only=True,
-                    )
-                )
-            except FileNotFoundError:
-                pass
-
-        # Inne agenty
-        random_agent = MARLRandomDiscreteMaskedOffPolicyAlgorithm(action_space=self.env.action_space)
-        passive_agent = PassiveAlgorithm(action_space=self.env.action_space)
-        mixed_agent = SeededMixedAlgorithm(action_space=self.env.action_space, seed=12345)
-
-
-        # Złożenie środowiska MARL
-        if self.training_phase == 1:
-            available_opponents = {
-                "random": random_agent.policy,
-                "passive": passive_agent.policy,
-                "mixed": mixed_agent.policy
-            }
-
-            # Jedno źródło konfiguracji gwarantuje, że trening i ewaluacja
-            # używają tej samej mieszanki 50% Random / 40% Passive / 10% Mixed.
-            opponent_weights = config.PHASE1_OPPONENT_WEIGHTS
-
-            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=10_001)
-            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=10_002)
-            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=10_003)
-
-            agents = [dqn_learner, opponent_1, opponent_2, opponent_3]
-        # TODO: trzeba zrobić inne fazy treningu
-        else:
+        # Przeciwnicy są teraz częścią DQNLearnerEnv. Replay buffer widzi tylko
+        # decyzje player_0, więc nie potrzebujemy MultiAgentOffPolicyAlgorithm
+        # ani sztucznych algorytmów reprezentujących boty.
+        if self.training_phase != 1:
             raise NotImplementedError(f"Nieobsługiwana faza DQN: {self.training_phase}")
-            
-        marl_algo = MultiAgentOffPolicyAlgorithm(algorithms=agents, env=self.env)
 
         # Kolektory
         buffer = VectorReplayBuffer(config.DQN_BUFFER_SIZE, len(self.train_envs))
         train_collector = Collector(
-            marl_algo, 
+            dqn_learner,
             self.train_envs, 
             buffer, 
             exploration_noise=True,
         )
 
         test_collector = Collector(
-            marl_algo, 
+            dqn_learner,
             self.test_envs, 
             exploration_noise=False,
         )
 
-        print("Zapełnianie bufora pierwszymi losowymi danymi...")
+        print("Zapełnianie bufora pierwszymi legalnymi decyzjami ucznia...")
         # Replay buffer nie jest częścią checkpointu, aby pojedynczy zapis nie
         # ważył setek MB. Świeży warm-up po wznowieniu zapewnia różnorodne dane
         # przed pierwszą kolejną aktualizacją sieci.
-        train_collector.collect(n_step=config.DQN_BUFFER_WARMUP, random=True, reset_before_collect=True)
+        # ``random=True`` w Collectorze losuje z całej przestrzeni Discrete i
+        # ignoruje maskę pokera. Zamiast tego ustawiamy epsilon=1: polityka DQN
+        # losuje wtedy w 100%, ale wyłącznie spośród legalnych ruchów.
+        dqn_learner.policy.set_eps_training(1.0)
+        # Warm-up odbywa się jeszcze przed wejściem trenera w kontekst
+        # ``training_step`` Tianshou. Dlatego na czas tej jednej kolekcji
+        # ustawiamy również epsilon inferencyjny, po czym natychmiast wracamy
+        # do deterministycznej ewaluacji.
+        dqn_learner.policy.set_eps_inference(1.0)
+        train_collector.collect(
+            n_step=config.DQN_BUFFER_WARMUP,
+            random=False,
+            reset_before_collect=True,
+        )
+        dqn_learner.policy.set_eps_inference(0.0)
+
+        # Każdy nazwany eksperyment ma osobny katalog zdarzeń. TensorBoard
+        # zapisuje loss i statystyki Tianshou, a poniżej dokładamy epsilon,
+        # rozmiar bufora oraz pokerowe wyniki walidacji.
+        tensorboard_dir = tensorboard_run_dir("dqn", self.run_name)
+        writer = SummaryWriter(log_dir=tensorboard_dir)
+        self.tensorboard_writer = writer
+        logger = TensorboardLogger(
+            writer,
+            training_interval=1_000,
+            update_interval=1_000,
+        )
 
         # Funkcje trenujące z logiką DQN (Epsilon Decay)
         # eps definiuje jak często podejmowane są losowe decyzje
@@ -290,6 +279,12 @@ class DQNPokerTrainer(BasePokerTrainer):
             else:
                 eps = max(config.DQN_OTHER_PHASE_EPS_MIN, config.DQN_OTHER_PHASE_EPS_MAX - env_step / (config.DQN_OTHER_PHASE_EPS_DECAY * self.total_steps))
             dqn_learner.policy.set_eps_training(eps)
+            writer.add_scalar("training/epsilon", eps, global_step=global_step)
+            writer.add_scalar(
+                "training/replay_buffer_size",
+                len(buffer),
+                global_step=global_step,
+            )
 
             # Callback jest wykonywany na granicy epok. Kontrola po poprzedniej
             # serii aktualizacji zatrzyma proces, zanim NaN uszkodzi kolejne
@@ -298,18 +293,31 @@ class DQNPokerTrainer(BasePokerTrainer):
 
             # Stan do wznowienia zapisujemy przed czasochłonną ewaluacją. Jeśli
             # komputer zostanie wyłączony w jej trakcie, nie tracimy ostatnich
-            # 100 tys. akcji treningowych.
+            # pełnego interwału decyzji treningowych.
             if global_step >= self.next_evaluation_step:
                 save_training_state(
                     dqn_learner,
                     global_step,
-                    DQN_CHECKPOINT_DIR / "training_state_latest.pth",
+                    self.checkpoint_dir / "training_state_latest.pth",
+                )
+
+            # Pełny, nienadpisywany stan co 10 epok pozwala wybrać konkretny
+            # punkt startowy kolejnej fazy. Replay buffer pozostaje pominięty,
+            # więc checkpoint jest mały i szybki do zapisania.
+            if (
+                global_step > 0
+                and global_step % config.DQN_FULL_STATE_INTERVAL_DECISIONS == 0
+            ):
+                save_training_state(
+                    dqn_learner,
+                    global_step,
+                    self.checkpoint_dir
+                    / f"training_state_step_{global_step:09d}.pth",
                 )
 
             self.run_periodic_evaluation(
                 env_step=global_step,
                 learner_policy=dqn_learner.policy,
-                opponent_policy=policy_opponent,
             )
 
         def test_fn(epoch, env_step):
@@ -326,7 +334,7 @@ class DQNPokerTrainer(BasePokerTrainer):
             batch_size=config.DQN_BATCH_SIZE,
             training_fn=train_fn,
             test_fn=test_fn,
-            multi_agent_return_reduction=lambda ret: ret[:, 0]
+            logger=logger,
         )
 
         # Pomiar przed treningiem daje uczciwy punkt odniesienia dla wszystkich
@@ -339,17 +347,16 @@ class DQNPokerTrainer(BasePokerTrainer):
             # w archiwum, tak samo jak przy rozpoczęciu nowego treningu.
             self._preserve_existing_checkpoints()
         print("Rozpoczęcie treningu DQN...")
-        result = OffPolicyTrainer(algorithm=marl_algo, params=trainer_params).run()
+        result = OffPolicyTrainer(algorithm=dqn_learner, params=trainer_params).run()
         print(f"\n=== Trening Zakończony ===\nNajlepsza nagroda: {result.best_reward}")
         # Callback treningowy działa przed kolekcją, dlatego ostatni próg
-        # miliona akcji obsługujemy jawnie po zwróceniu końcowych statystyk.
-        # Zapewnia to checkpoint i walidację dokładnie dla kroku 1 000 000.
+        # planowanej liczby decyzji obsługujemy jawnie po zwróceniu statystyk.
+        # Zapewnia to checkpoint i walidację również na końcu fazy.
         final_step = self.starting_step + result.train_step
         ensure_finite_model(net_learner, final_step)
         self.run_periodic_evaluation(
             env_step=final_step,
             learner_policy=dqn_learner.policy,
-            opponent_policy=policy_opponent,
         )
         self.run_final_evaluation(
             learner_policy=dqn_learner.policy,
@@ -358,8 +365,10 @@ class DQNPokerTrainer(BasePokerTrainer):
         save_training_state(
             dqn_learner,
             final_step,
-            DQN_CHECKPOINT_DIR / "training_state_final.pth",
+            self.checkpoint_dir / "training_state_final.pth",
         )
+        writer.flush()
+        writer.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -370,33 +379,70 @@ def parse_args() -> argparse.Namespace:
         help="Stan treningu albo starszy plik wag .pth, od którego kontynuować.",
     )
     parser.add_argument(
+        "--run-name",
+        help=(
+            "Nazwa izolowanego katalogu checkpointów i TensorBoard. "
+            "Domyślnie tworzona z daty i czasu."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=11_001,
+        help="Seed inicjalizacji sieci, eksploracji i środowisk.",
+    )
+    parser.add_argument(
         "--start-step",
         type=int,
-        help="Liczba wykonanych akcji; wymagana tylko dla starego pliku wag.",
+        help=(
+            "Liczba wykonanych decyzji ucznia; wymagana tylko dla pliku "
+            "zawierającego same wagi."
+        ),
     )
     parser.add_argument(
         "--actions",
+        "--decisions",
+        dest="actions",
         type=int,
         default=config.DQN_MAX_EPOCHS * config.DQN_STEPS_PER_EPOCH,
-        help="Liczba nowych akcji do wykonania (domyślnie 1 000 000).",
+        help="Liczba nowych decyzji DQN (domyślnie 250 000).",
     )
     args = parser.parse_args()
     if args.actions <= 0 or args.actions % config.DQN_STEPS_PER_EPOCH != 0:
         parser.error(
-            f"--actions musi być dodatnią wielokrotnością "
+            f"--decisions musi być dodatnią wielokrotnością "
             f"{config.DQN_STEPS_PER_EPOCH:,}."
         )
     if args.start_step is not None and args.resume is None:
         parser.error("--start-step ma sens tylko razem z --resume.")
+    if args.run_name is None:
+        args.run_name = datetime.now().strftime("baseline_%Y%m%d_%H%M%S")
+    if not RUN_NAME_PATTERN.fullmatch(args.run_name):
+        parser.error(
+            "--run-name może zawierać tylko litery, cyfry, '-' i '_' "
+            "(maksymalnie 64 znaki)."
+        )
     return args
 
 if __name__ == "__main__":
     args = parse_args()
     validate_phase_one_configuration()
     configure_macbook_cpu_runtime()
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    checkpoint_dir = dqn_run_dir(args.run_name)
+    train_env_factories = [
+        partial(make_dqn_training_env, args.seed + worker_index * 1_000_000)
+        for worker_index in range(config.DQN_NUM_TRAIN_ENVS)
+    ]
+    test_env_factories = [
+        partial(make_dqn_training_env, args.seed + 100_000_000 + worker_index * 1_000_000)
+        for worker_index in range(config.DQN_NUM_TEST_ENVS)
+    ]
     print(
         "Konfiguracja fazy 1: "
-        f"{args.actions:,} nowych akcji treningowych, "
+        f"run '{args.run_name}', seed {args.seed}, "
+        f"{args.actions:,} decyzji DQN, "
         f"warm-up {config.DQN_BUFFER_WARMUP:,}, "
         f"{config.DQN_NUM_TRAIN_ENVS} środowisk, "
         f"{config.TORCH_NUM_THREADS} wątek PyTorch."
@@ -410,7 +456,13 @@ if __name__ == "__main__":
             num_test_envs=config.DQN_NUM_TEST_ENVS,
             max_epochs=args.actions // config.DQN_STEPS_PER_EPOCH,
             steps_per_epoch=config.DQN_STEPS_PER_EPOCH,
+            env_factory=make_dqn_training_env,
+            evaluation_interval_steps=config.DQN_EVAL_INTERVAL_DECISIONS,
+            checkpoint_dir=checkpoint_dir,
+            train_env_factories=train_env_factories,
+            test_env_factories=test_env_factories,
             resume_path=args.resume,
             start_step=args.start_step,
+            run_name=args.run_name,
         )
         trainer.setup_and_train()
