@@ -34,15 +34,33 @@ tests/                      testy środowiska i modeli
 
 Parametry środowiska, DQN i PPO zmienia się w `src/config.py`.
 
+Pierwsza faza DQN jest skonfigurowana pod lokalny trening na MacBooku Air M2:
+
+- 1 000 000 akcji treningowych (100 epok po 10 000 akcji),
+- dodatkowe 25 000 losowych akcji rozgrzewających replay buffer,
+- 8 równoległych procesów środowiska i 1 wątek obliczeniowy PyTorch,
+- przeciwnicy losowani na turniej w proporcji 50% Random, 40% Check/Call,
+  10% Mixed,
+- epsilon malejący z 1.0 do 0.1 przez 720 000 akcji.
+
+Pełna walidacja odbywa się co 100 000 akcji na czterech zestawach
+przeciwników. Po zakończeniu najlepszy i ostatni model rozgrywają po 200
+turniejów przeciwko każdemu zestawowi.
+
+Osiem środowisk celowo wykorzystuje wszystkie rdzenie komputera. Podczas
+treningu system może reagować wolno, dlatego najlepiej nie wykonywać w tym
+czasie innych obciążających zadań.
+
 ```bash
-PYTHONPATH=src python src/training/train_dqn.py
-PYTHONPATH=src python src/training/train_ppo.py
+PYTHONPATH=src .venv/bin/python src/training/train_dqn.py
+PYTHONPATH=src .venv/bin/python src/training/train_ppo.py
 ```
 
 Checkpointy są zapisywane niezależnie od katalogu uruchomienia:
 
 ```text
 checkpoints/dqn/best.pth
+checkpoints/dqn/latest.pth
 checkpoints/dqn/final.pth
 checkpoints/ppo/best.pth
 checkpoints/ppo/final.pth

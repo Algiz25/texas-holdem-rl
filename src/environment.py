@@ -1,4 +1,5 @@
 import random
+import uuid
 
 import numpy as np
 import rlcard
@@ -30,6 +31,11 @@ class TexasHoldemTournament(AECEnv):
         self.num_players = num_players
         self.starting_chips = starting_chips
         self.debug = debug
+        # Identyfikator instancji odróżnia równoległe środowiska. Polityki
+        # przeciwników łączą go z numerem resetu, aby zachować wylosowany styl
+        # przez cały jeden turniej, bez mieszania ośmiu procesów treningowych.
+        self._environment_id = uuid.uuid4().hex
+        self._tournament_number = 0
         
         self.possible_agents = [f"player_{i}" for i in range(num_players)]
         self.agents = self.possible_agents[:]
@@ -52,6 +58,8 @@ class TexasHoldemTournament(AECEnv):
         # może odtwarzać te same rozdania dla kolejnych checkpointów.
         self._tournament_seed = seed
         self._hand_number = 0
+        self._tournament_number += 1
+        self.tournament_id = f"{self._environment_id}:{self._tournament_number}"
         self.agents = self.possible_agents[:]
         # Turniejowe żetony przechowujemy pod nazwami agentów, co ułatwi odczyt po bankructwach
         self.tournament_chips = {agent: self.starting_chips for agent in self.possible_agents}
@@ -67,7 +75,10 @@ class TexasHoldemTournament(AECEnv):
         self.truncations = {agent: False for agent in self.agents}
         self.rewards = {agent: 0.0 for agent in self.agents}
         self._cumulative_rewards = {agent: 0.0 for agent in self.agents}
-        self.infos = {agent: {} for agent in self.agents}
+        self.infos = {
+            agent: {"tournament_id": self.tournament_id}
+            for agent in self.agents
+        }
         
         self._start_new_hand()
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from datetime import datetime
 
 import torch
 from tianshou.env import PettingZooEnv, SubprocVectorEnv
@@ -46,6 +47,7 @@ class BasePokerTrainer:
         )
         self.next_evaluation_step = config.EVAL_INTERVAL_STEPS
         self.best_validation_score = float("-inf")
+        self._existing_checkpoints_preserved = False
         ensure_output_directories()
 
         print(f"Inicjalizacja środowisk PettingZoo dla {self.algo_name.upper()}...")
@@ -113,6 +115,7 @@ class BasePokerTrainer:
 
     def run_initial_evaluation(self, *, learner_policy) -> None:
         """Zapisz punkt odniesienia przed wykonaniem pierwszej aktualizacji sieci."""
+        self._preserve_existing_checkpoints()
         checkpoint_path = self.checkpoint_dir / "step_000000000.pth"
         torch.save(learner_policy.state_dict(), checkpoint_path)
         evaluator = self.evaluator_class(
@@ -138,6 +141,30 @@ class BasePokerTrainer:
             self.best_validation_score = phase_result.bb_per_100
             shutil.copy2(checkpoint_path, self.checkpoint_dir / "best.pth")
             shutil.copy2(checkpoint_path, self.checkpoint_dir / "latest.pth")
+
+    def _preserve_existing_checkpoints(self) -> None:
+        """Skopiuj modele z wcześniejszego treningu przed użyciem stałych nazw.
+
+        `best.pth`, `latest.pth` i checkpointy krokowe są wygodne dla skryptów,
+        ale kolejny trening używa tych samych nazw. Jednorazowa kopia do
+        katalogu `archive` chroni poprzednie wagi bez wpływu na nowy przebieg.
+        """
+        if self._existing_checkpoints_preserved:
+            return
+
+        existing = sorted(self.checkpoint_dir.glob("*.pth"))
+        if existing:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            archive_dir = self.checkpoint_dir / "archive" / timestamp
+            archive_dir.mkdir(parents=True, exist_ok=False)
+            for checkpoint in existing:
+                shutil.copy2(checkpoint, archive_dir / checkpoint.name)
+            print(
+                f"[ARCHIWUM] Zachowano {len(existing)} poprzednich checkpointów "
+                f"w '{archive_dir}'."
+            )
+
+        self._existing_checkpoints_preserved = True
 
     def run_final_evaluation(self, *, learner_policy, env_step: int) -> None:
         """Zapisz ostatni model i wykonaj duży test na nieużywanych seedach."""

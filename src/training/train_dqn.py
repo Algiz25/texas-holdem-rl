@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from tianshou.data import Collector, VectorReplayBuffer
 from tianshou.algorithm.modelfree.dqn import DQN, DiscreteQLearningPolicy
 from tianshou.algorithm.multiagent.marl import MultiAgentOffPolicyAlgorithm
@@ -10,9 +11,61 @@ import config
 from training.base_trainer import BasePokerTrainer
 from evaluation.evaluator_dqn import DQNEvaluator
 from models import MaskedActor
-from opponents import FrozenDQN, PassiveAlgorithm, AggressiveAlgorithm, SeededMixedAlgorithm
-from phases import DynamicOpponentAlgorithm, ShuffleOpponentsHook
+from opponents import FrozenDQN, PassiveAlgorithm, SeededMixedAlgorithm
+from phases import DynamicOpponentAlgorithm
 from paths import DQN_CHECKPOINT_DIR
+
+def phase_one_epsilon(env_step: int) -> float:
+    """Liniowo zmniejsz eksplorację z 1.0 do 0.1 przez 720 tys. akcji.
+
+    Po osiągnięciu minimum agent nadal losuje 10% decyzji. Zapobiega to zbyt
+    wczesnemu przywiązaniu do strategii poznanej głównie na pasywnych botach.
+    """
+    progress = min(max(env_step, 0) / config.DQN_PHASE1_EPS_DECAY_STEPS, 1.0)
+    return max(
+        config.DQN_RAND_PHASE_EPS_MIN,
+        config.DQN_EPS_MAX
+        + progress * (config.DQN_RAND_PHASE_EPS_MIN - config.DQN_EPS_MAX),
+    )
+
+
+def configure_macbook_cpu_runtime() -> None:
+    """Ustaw PyTorch zgodnie z benchmarkiem wykonanym na MacBooku Air M2.
+
+    Osiem osobnych procesów zbiera doświadczenia ze środowisk pokerowych.
+    Aktualizacja małej sieci DQN jest natomiast najszybsza na jednym wątku
+    CPU; MPS i wielowątkowy PyTorch dodawały więcej narzutu niż pracy.
+    """
+    torch.set_num_threads(config.TORCH_NUM_THREADS)
+    torch.set_num_interop_threads(config.TORCH_NUM_INTEROP_THREADS)
+
+
+def ensure_finite_model(model: torch.nn.Module, env_step: int) -> None:
+    """Przerwij trening od razu, gdy wagi zawierają NaN albo nieskończoność."""
+    invalid_parameters = [
+        name
+        for name, parameter in model.named_parameters()
+        if not torch.isfinite(parameter).all()
+    ]
+    if invalid_parameters:
+        names = ", ".join(invalid_parameters)
+        raise FloatingPointError(
+            f"Niestabilny DQN po {env_step:,} akcjach; "
+            f"niepoprawne parametry: {names}"
+        )
+
+
+def validate_phase_one_configuration() -> None:
+    """Wykryj literówki w konfiguracji przed kosztownym uruchomieniem."""
+    if config.TRAINING_PHASE != 1:
+        raise ValueError("Ten skrypt fazy rozgrzewkowej wymaga TRAINING_PHASE = 1")
+    if not np.isclose(sum(config.PHASE1_OPPONENT_WEIGHTS.values()), 1.0):
+        raise ValueError("Wagi przeciwników fazy 1 muszą sumować się do 1.0")
+    if config.DQN_PHASE1_EPS_DECAY_STEPS > (
+        config.DQN_MAX_EPOCHS * config.DQN_STEPS_PER_EPOCH
+    ):
+        raise ValueError("Epsilon nie zdąży osiągnąć minimum przed końcem fazy 1")
+
 
 class DQNPokerTrainer(BasePokerTrainer):
     def setup_and_train(self):
@@ -84,7 +137,6 @@ class DQNPokerTrainer(BasePokerTrainer):
         # Inne agenty
         random_agent = MARLRandomDiscreteMaskedOffPolicyAlgorithm(action_space=self.env.action_space)
         passive_agent = PassiveAlgorithm(action_space=self.env.action_space)
-        aggressive_agent = AggressiveAlgorithm(action_space=self.env.action_space)
         mixed_agent = SeededMixedAlgorithm(action_space=self.env.action_space, seed=12345)
 
 
@@ -96,25 +148,20 @@ class DQNPokerTrainer(BasePokerTrainer):
                 "mixed": mixed_agent.policy
             }
 
-            # 50% random, 40% passive, 10% mixed
-            opponent_weights = {
-                "random": 0.50,
-                "passive": 0.40,
-                "mixed": 0.10
-            }
+            # Jedno źródło konfiguracji gwarantuje, że trening i ewaluacja
+            # używają tej samej mieszanki 50% Random / 40% Passive / 10% Mixed.
+            opponent_weights = config.PHASE1_OPPONENT_WEIGHTS
 
-            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
-            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
-            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=10_001)
+            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=10_002)
+            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=10_003)
 
             agents = [dqn_learner, opponent_1, opponent_2, opponent_3]
         # TODO: trzeba zrobić inne fazy treningu
         else:
-            print("Nie ma takiej fazy")
+            raise NotImplementedError(f"Nieobsługiwana faza DQN: {self.training_phase}")
             
         marl_algo = MultiAgentOffPolicyAlgorithm(algorithms=agents, env=self.env)
-
-        shuffle_hook = ShuffleOpponentsHook(opponent_1, opponent_2, opponent_3)
 
         # Kolektory
         buffer = VectorReplayBuffer(config.DQN_BUFFER_SIZE, len(self.train_envs))
@@ -122,15 +169,13 @@ class DQNPokerTrainer(BasePokerTrainer):
             marl_algo, 
             self.train_envs, 
             buffer, 
-            exploration_noise=True, 
-            on_episode_done_hook=shuffle_hook
+            exploration_noise=True,
         )
 
         test_collector = Collector(
             marl_algo, 
             self.test_envs, 
-            exploration_noise=False, 
-            on_episode_done_hook=shuffle_hook
+            exploration_noise=False,
         )
 
         print("Zapełnianie bufora pierwszymi losowymi danymi...")
@@ -139,15 +184,17 @@ class DQNPokerTrainer(BasePokerTrainer):
         # Funkcje trenujące z logiką DQN (Epsilon Decay)
         # eps definiuje jak często podejmowane są losowe decyzje
         # TODO: można tu coś pokombinować, ale raczej jest git
-        latest_step = {"value": 0}
-
         def train_fn(epoch, env_step):
-            latest_step["value"] = env_step
             if self.phase_name in {"1", "random"}:
-                eps = max(config.DQN_RAND_PHASE_EPS_MIN, config.DQN_EPS_MAX - env_step / (config.DQN_RAND_PHASE_EPS_DECAY * self.total_steps))
+                eps = phase_one_epsilon(env_step)
             else:
                 eps = max(config.DQN_OTHER_PHASE_EPS_MIN, config.DQN_OTHER_PHASE_EPS_MAX - env_step / (config.DQN_OTHER_PHASE_EPS_DECAY * self.total_steps))
             dqn_learner.policy.set_eps_training(eps)
+
+            # Callback jest wykonywany na granicy epok. Kontrola po poprzedniej
+            # serii aktualizacji zatrzyma proces, zanim NaN uszkodzi kolejne
+            # checkpointy albo cały replay buffer.
+            ensure_finite_model(net_learner, env_step)
 
             self.run_periodic_evaluation(
                 env_step=env_step,
@@ -162,6 +209,7 @@ class DQNPokerTrainer(BasePokerTrainer):
         trainer_params = OffPolicyTrainerParams(
             max_epochs=self.max_epochs,
             epoch_num_steps=self.steps_per_epoch,
+            collection_step_num_env_steps=config.DQN_COLLECTION_STEPS,
             training_collector=train_collector,
             test_collector=test_collector,
             test_step_num_episodes=config.EVAL_SMOKE_TOURNAMENTS,
@@ -177,12 +225,30 @@ class DQNPokerTrainer(BasePokerTrainer):
         print("Rozpoczęcie treningu DQN...")
         result = OffPolicyTrainer(algorithm=marl_algo, params=trainer_params).run()
         print(f"\n=== Trening Zakończony ===\nNajlepsza nagroda: {result.best_reward}")
+        # Callback treningowy działa przed kolekcją, dlatego ostatni próg
+        # miliona akcji obsługujemy jawnie po zwróceniu końcowych statystyk.
+        # Zapewnia to checkpoint i walidację dokładnie dla kroku 1 000 000.
+        ensure_finite_model(net_learner, result.train_step)
+        self.run_periodic_evaluation(
+            env_step=result.train_step,
+            learner_policy=dqn_learner.policy,
+            opponent_policy=policy_opponent,
+        )
         self.run_final_evaluation(
             learner_policy=dqn_learner.policy,
-            env_step=latest_step["value"] or self.total_steps,
+            env_step=result.train_step,
         )
 
 if __name__ == "__main__":
+    validate_phase_one_configuration()
+    configure_macbook_cpu_runtime()
+    print(
+        "Konfiguracja fazy 1: "
+        f"{config.DQN_MAX_EPOCHS * config.DQN_STEPS_PER_EPOCH:,} akcji treningowych, "
+        f"warm-up {config.DQN_BUFFER_WARMUP:,}, "
+        f"{config.DQN_NUM_TRAIN_ENVS} środowisk, "
+        f"{config.TORCH_NUM_THREADS} wątek PyTorch."
+    )
     trainer = DQNPokerTrainer(
         algo_name="dqn",
         training_phase=config.TRAINING_PHASE,

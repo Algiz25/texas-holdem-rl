@@ -43,8 +43,8 @@ HAND_CATEGORY_NAMES = (
 EVALUATION_SUITES = ("random", "passive", "mixed", "phase1_mix")
 
 MIXED_ACTION_WEIGHTS = np.array([0.20, 0.45, 0.18, 0.12, 0.05])
-PHASE1_OPPONENTS = ("random", "passive", "mixed")
-PHASE1_WEIGHTS = np.array([0.50, 0.40, 0.10])
+PHASE1_OPPONENTS = tuple(config.PHASE1_OPPONENT_WEIGHTS)
+PHASE1_WEIGHTS = np.array(tuple(config.PHASE1_OPPONENT_WEIGHTS.values()))
 
 
 @dataclass

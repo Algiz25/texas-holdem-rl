@@ -8,6 +8,22 @@ from observation import schema
 
 
 class TexasHoldemTournamentTest(unittest.TestCase):
+    def test_each_reset_exposes_a_new_tournament_identifier(self) -> None:
+        env = TexasHoldemTournament()
+        env.reset(seed=10)
+        first_id = env.infos["player_0"]["tournament_id"]
+
+        env.reset(seed=10)
+        second_id = env.infos["player_0"]["tournament_id"]
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertTrue(
+            all(
+                info["tournament_id"] == second_id
+                for info in env.infos.values()
+            )
+        )
+
     def setUp(self) -> None:
         self.env = TexasHoldemTournament(num_players=4, starting_chips=200)
         self.env.reset(seed=7)

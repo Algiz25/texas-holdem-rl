@@ -10,7 +10,7 @@ import config
 from training.base_trainer import BasePokerTrainer
 from evaluation.evaluator_ppo import PPOEvaluator
 from models import MaskedActor, Critic, CPUActionActorPolicy
-from phases import DynamicOpponentAlgorithm, ShuffleOpponentsHook
+from phases import DynamicOpponentAlgorithm
 from opponents import RandomOnPolicyAgent, FrozenPPO, PassiveAlgorithm, AggressiveAlgorithm, SeededMixedAlgorithm
 from paths import PPO_CHECKPOINT_DIR
 
@@ -112,16 +112,13 @@ class PPOPokerTrainer(BasePokerTrainer):
                 "mixed": mixed_agent.policy
             }
 
-            # 50% random, 40% passive, 10% mixed
-            opponent_weights = {
-                "random": 0.50,
-                "passive": 0.40,
-                "mixed": 0.10
-            }
+            # Wspólna konfiguracja nie pozwala treningowi PPO i ewaluatorowi
+            # nieświadomie używać różnych proporcji przeciwników fazy 1.
+            opponent_weights = config.PHASE1_OPPONENT_WEIGHTS
 
-            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
-            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
-            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=20_001)
+            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=20_002)
+            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=20_003)
 
             agents = [ppo_learner, opponent_1, opponent_2, opponent_3]
         # TODO: trzeba zdefiniować inne fazy
@@ -130,23 +127,19 @@ class PPOPokerTrainer(BasePokerTrainer):
 
         marl_algo = MultiAgentOnPolicyAlgorithm(algorithms=agents, env=self.env)
 
-        shuffle_hook = ShuffleOpponentsHook(opponent_1, opponent_2, opponent_3)
-
         # Kolektory
         buffer = VectorReplayBuffer(config.PPO_BUFFER_SIZE, len(self.train_envs))
         train_collector = Collector(
             marl_algo, 
             self.train_envs, 
             buffer, 
-            exploration_noise=True, 
-            on_episode_done_hook=shuffle_hook
+            exploration_noise=True,
         )
 
         test_collector = Collector(
             marl_algo, 
             self.test_envs, 
-            exploration_noise=False, 
-            on_episode_done_hook=shuffle_hook
+            exploration_noise=False,
         )
 
         # Funkcje trenujące z logiką PPO
