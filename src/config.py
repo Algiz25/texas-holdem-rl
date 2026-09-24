@@ -74,6 +74,11 @@ DQN_BUFFER_SIZE = 500_000
 DQN_BUFFER_WARMUP = 25_000
 DQN_BATCH_SIZE = 64
 
+# Jedna aktualizacja gradientu przypada na cztery nowe decyzje ucznia.
+# Zmniejsza to wielokrotne trenowanie na tych samych rekordach i pozwala
+# zebrać więcej różnorodnych rozdań w ciągu jednej nocy.
+DQN_UPDATE_RATIO = 0.25
+
 # MacBook Air M2 ma cztery rdzenie wydajnościowe i cztery energooszczędne.
 # Osiem procesów środowiska dało najwyższą łączną przepustowość w benchmarku.
 DQN_NUM_TRAIN_ENVS = 8
@@ -99,6 +104,11 @@ DQN_COLLECTION_STEPS = 1_000
 # Walidacja co 25 tys. decyzji zachowuje dziesięć punktów kontrolnych podczas
 # fazy porównywalnej z dawnym milionem ruchów całego stołu.
 DQN_EVAL_INTERVAL_DECISIONS = 25_000
+
+# Oprócz nadpisywanego stanu awaryjnego zachowujemy pełny stan co 10 epok.
+# Te pliki zawierają również target network i optymalizator, dlatego mogą być
+# bezpiecznym początkiem kolejnej fazy albo wznowienia eksperymentu.
+DQN_FULL_STATE_INTERVAL_DECISIONS = 100_000
 
 # ZMIENNE TRENINGOWE PPO
 PPO_LEARNING_RATE = 3e-4 # TODO: sprawdzić czy to dobra ilość

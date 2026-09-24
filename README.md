@@ -13,7 +13,10 @@ pip install -r requirements.txt
 ## Struktura
 
 ```text
-checkpoints/                lokalne checkpointy modeli
+checkpoints/                lokalne checkpointy modeli i raporty ewaluacji
+logs/                       lokalne logi TensorBoard i terminala
+scripts/
+  run_overnight_dqn.sh      jeden długi, bezpiecznie zatrzymywany trening
 src/
   config.py                 parametry środowiska, treningu i ewaluacji
   environment.py            środowisko PettingZoo/RLCard
@@ -44,7 +47,8 @@ Pierwsza faza DQN jest skonfigurowana pod lokalny trening na MacBooku Air M2:
   i 1 wątek obliczeniowy PyTorch,
 - przeciwnicy losowani na turniej w proporcji 50% Random, 40% Check/Call,
   10% Mixed,
-- epsilon malejący z 1.0 do 0.1 przez 180 000 decyzji ucznia.
+- epsilon malejący z 1.0 do 0.1 przez 180 000 decyzji ucznia,
+- jedna aktualizacja gradientu na cztery nowe decyzje (`update ratio = 0.25`).
 
 Trening DQN korzysta z jednoagentowej nakładki. Po akcji ucznia środowisko
 samodzielnie rozgrywa ruchy botów i zwraca sterowanie dopiero przy kolejnej
@@ -73,6 +77,16 @@ PYTHONPATH=src .venv/bin/python src/training/train_dqn.py
 PYTHONPATH=src .venv/bin/python src/training/train_ppo.py
 ```
 
+Każdy trening DQN otrzymuje nazwę i seed. Nazwa oddziela jego modele, raporty
+ewaluacji oraz wykresy od pozostałych eksperymentów. Przykład pojedynczego
+runu:
+
+```bash
+PYTHONPATH=src .venv/bin/python src/training/train_dqn.py \
+  --run-name baseline_seed_11001 \
+  --seed 11001
+```
+
 Nowy trening DQN zapisuje także `training_state_latest.pth` i
 `training_state_final.pth`. Zawierają wagi, sieć docelową, optymalizator oraz
 liczniki potrzebne do kontynuacji. Replay buffer nie jest zapisywany, dlatego
@@ -82,7 +96,9 @@ Kontynuacja o kolejne 250 000 decyzji z nowego stanu treningowego:
 
 ```bash
 PYTHONPATH=src .venv/bin/python src/training/train_dqn.py \
-  --resume checkpoints/dqn/training_state_final.pth \
+  --run-name baseline_seed_11001 \
+  --seed 11001 \
+  --resume checkpoints/dqn/baseline_seed_11001/training_state_final.pth \
   --decisions 250000
 ```
 
@@ -92,17 +108,64 @@ Pierwszy trening po tej poprawce należy rozpocząć od zera. Stare checkpointy
 można zachować wyłącznie jako materiał porównawczy w ewaluacji.
 
 Skrypt blokuje równoczesne uruchomienie drugiego treningu DQN w tym samym
-katalogu checkpointów.
+katalogu projektu.
 
-Checkpointy są zapisywane niezależnie od katalogu uruchomienia:
+Checkpointy każdego DQN są zapisywane w osobnym katalogu:
 
 ```text
-checkpoints/dqn/best.pth
-checkpoints/dqn/latest.pth
-checkpoints/dqn/final.pth
+checkpoints/dqn/<run-name>/best.pth
+checkpoints/dqn/<run-name>/latest.pth
+checkpoints/dqn/<run-name>/final.pth
+checkpoints/dqn/<run-name>/training_state_step_000100000.pth
+checkpoints/dqn/<run-name>/training_state_step_000200000.pth
+checkpoints/dqn/<run-name>/training_state_final.pth
 checkpoints/ppo/best.pth
 checkpoints/ppo/final.pth
 ```
+
+Pliki `training_state_step_*` zachowują pełny stan DQN co 100 000 decyzji
+(10 epok). Można ich użyć do wznowienia albo jako punktu startowego kolejnej
+fazy. Pliki `step_*`, `best.pth`, `latest.pth` i `final.pth` zawierają wagi
+przeznaczone do porównywania modeli. Replay buffer nie jest zapisywany.
+
+## Trening nocny DQN
+
+Skrypt nocny prowadzi jeden ciągły trening `overnight_long_seed_11001`. Dzięki
+temu ten sam model oraz replay buffer rozwijają się przez całą noc, zamiast
+kilka razy zaczynać od zera. Limit 100 milionów decyzji jest wyłącznie
+zabezpieczeniem technicznym — po około dziewięciu godzinach trening należy
+zatrzymać ręcznie.
+
+Długi run korzysta z harmonogramu epsilon `1.0 → 0.1` przez pierwsze 700 000
+decyzji i wykonuje pełną ewaluację co 250 000 decyzji. Ogranicza to czas
+poświęcony na testy, ale pozostawia regularne, porównywalne punkty kontrolne.
+
+Przed startem skrypt uruchamia testy. Sam włącza też `caffeinate`, więc macOS
+nie uśpi komputera ani nie wygasi ekranu do końca pracy. Należy pozostawić
+MacBooka podłączonego do zasilania i uruchomić:
+
+```bash
+./scripts/run_overnight_dqn.sh
+```
+
+Rano należy przejść do terminala z treningiem i jeden raz nacisnąć `Ctrl+C`.
+Skrypt przechwytuje przerwanie, zapisuje `interrupted.pth`, aktualizuje
+`latest.pth` oraz tworzy pełny `training_state_latest.pth`. Celowo nie uruchamia
+wtedy długiej ewaluacji końcowej, aby komputer został zwolniony od razu.
+
+Jeżeli trening ma być kontynuowany kolejnej nocy, ponowne wykonanie tej samej
+komendy wznawia model od `training_state_latest.pth`. Ponieważ replay buffer
+nie jest częścią stanu, przed dalszym uczeniem ponownie wykonywany jest warm-up
+25 000 decyzji.
+
+Postęp, loss, epsilon i wyniki pokerowe można oglądać w TensorBoard:
+
+```bash
+.venv/bin/tensorboard --logdir logs/dqn
+```
+
+Następnie należy otworzyć `http://localhost:6006`. Surowy zapis terminala z
+każdego modelu trafia do `logs/dqn/overnight_<data>/`.
 
 ## Ewaluacja
 

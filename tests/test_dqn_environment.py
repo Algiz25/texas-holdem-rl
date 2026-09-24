@@ -14,6 +14,28 @@ from training.dqn_environment import DQNLearnerEnv
 
 
 class DQNLearnerEnvironmentTests(unittest.TestCase):
+    def test_named_run_seed_reproduces_the_opening_state(self) -> None:
+        """Ten sam seed runu ma odtwarzać stół i osobowości botów."""
+        first_env = DQNLearnerEnv(initial_seed=11_001)
+        second_env = DQNLearnerEnv(initial_seed=11_001)
+
+        first_observation, first_info = first_env.reset()
+        second_observation, second_info = second_env.reset()
+
+        np.testing.assert_array_equal(
+            first_observation["obs"],
+            second_observation["obs"],
+        )
+        np.testing.assert_array_equal(
+            first_observation["mask"],
+            second_observation["mask"],
+        )
+        self.assertEqual(first_env.opponent_styles, second_env.opponent_styles)
+        self.assertEqual(first_info, second_info)
+
+        first_env.close()
+        second_env.close()
+
     def test_every_nonterminal_boundary_is_a_learner_decision(self) -> None:
         """Adapter nie może oddać kolektorowi obserwacji przeciwnika."""
         env = DQNLearnerEnv()

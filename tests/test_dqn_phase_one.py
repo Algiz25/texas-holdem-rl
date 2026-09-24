@@ -30,6 +30,11 @@ class DQNPhaseOneConfigurationTests(unittest.TestCase):
         self.assertAlmostEqual(phase_one_epsilon(180_000), 0.1)
         self.assertAlmostEqual(phase_one_epsilon(250_000), 0.1)
 
+    def test_overnight_run_can_use_a_longer_epsilon_schedule(self) -> None:
+        self.assertAlmostEqual(phase_one_epsilon(0, 700_000), 1.0)
+        self.assertAlmostEqual(phase_one_epsilon(350_000, 700_000), 0.55)
+        self.assertAlmostEqual(phase_one_epsilon(700_000, 700_000), 0.1)
+
     def test_macbook_uses_benchmarked_parallelism(self) -> None:
         self.assertEqual(config.DQN_NUM_TRAIN_ENVS, 8)
         self.assertEqual(config.DQN_NUM_TEST_ENVS, 1)
@@ -38,6 +43,7 @@ class DQNPhaseOneConfigurationTests(unittest.TestCase):
         self.assertEqual(config.DQN_BUFFER_WARMUP, 25_000)
         self.assertEqual(config.EVAL_NUM_WORKERS, 4)
         self.assertEqual(config.EVAL_SMOKE_TOURNAMENTS, 1)
+        self.assertEqual(config.DQN_FULL_STATE_INTERVAL_DECISIONS, 100_000)
 
 
 if __name__ == "__main__":
