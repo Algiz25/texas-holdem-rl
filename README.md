@@ -38,7 +38,8 @@ Pierwsza faza DQN jest skonfigurowana pod lokalny trening na MacBooku Air M2:
 
 - 1 000 000 akcji treningowych (100 epok po 10 000 akcji),
 - dodatkowe 25 000 losowych akcji rozgrzewających replay buffer,
-- 8 równoległych procesów środowiska i 1 wątek obliczeniowy PyTorch,
+- 8 równoległych procesów treningowych, 1 proces krótkiego testu technicznego
+  i 1 wątek obliczeniowy PyTorch,
 - przeciwnicy losowani na turniej w proporcji 50% Random, 40% Check/Call,
   10% Mixed,
 - epsilon malejący z 1.0 do 0.1 przez 720 000 akcji.
@@ -47,7 +48,8 @@ Pełna walidacja odbywa się co 100 000 akcji na czterech zestawach
 przeciwników. Pojedynczy mecz trwa do końca turnieju albo do 100 rozdań, więc
 główna metryka `bb/100` nie zależy od tego, jak długo pasywni gracze utrzymują
 się przy stole. Po zakończeniu najlepszy i ostatni model rozgrywają po 200
-meczów przeciwko każdemu zestawowi.
+meczów przeciwko każdemu zestawowi. Cztery zestawy są liczone równolegle w
+osobnych procesach.
 
 Osiem środowisk celowo wykorzystuje wszystkie rdzenie komputera. Podczas
 treningu system może reagować wolno, dlatego najlepiej nie wykonywać w tym

@@ -77,6 +77,14 @@ def _five_card_category(cards: Sequence[str]) -> int:
 def hand_category(own_cards: Sequence[str], board_cards: Sequence[str]) -> int:
     """Zwróć indeks najlepszej aktualnie utworzonej kategorii układu."""
     encode_card_observation(own_cards, board_cards)
+    return _hand_category_from_valid_cards(own_cards, board_cards)
+
+
+def _hand_category_from_valid_cards(
+    own_cards: Sequence[str],
+    board_cards: Sequence[str],
+) -> int:
+    """Policz kategorię po wcześniejszej walidacji kart."""
     cards = [*(card.upper() for card in own_cards), *(card.upper() for card in board_cards)]
 
     if len(cards) < 5:
@@ -95,6 +103,14 @@ def encode_draws(
 ) -> np.ndarray:
     """Zakoduj draw do koloru, OESD, gutshot i backdoor flush draw."""
     encode_card_observation(own_cards, board_cards)
+    return _encode_draws_from_valid_cards(own_cards, board_cards)
+
+
+def _encode_draws_from_valid_cards(
+    own_cards: Sequence[str],
+    board_cards: Sequence[str],
+) -> np.ndarray:
+    """Policz drawy po wcześniejszej walidacji kart."""
     encoded = np.zeros(4, dtype=np.float32)
 
     if len(board_cards) not in (3, 4):
@@ -156,14 +172,21 @@ def encode_derived_features(
     board_cards: Sequence[str],
     pot: float,
     to_call: float,
+    *,
+    cards_are_validated: bool = False,
 ) -> np.ndarray:
     """Zbuduj kompletny blok indeksów 204-221."""
     encoded = np.zeros(
         schema.OBSERVATION_SIZE - schema.POT_ODDS_INDEX,
         dtype=np.float32,
     )
+    # Samodzielne użycie tej funkcji nadal waliduje karty. Pełny encoder stanu
+    # może przekazać `cards_are_validated=True`, ponieważ chwilę wcześniej
+    # zakodował dokładnie ten sam zestaw kart.
+    if not cards_are_validated:
+        encode_card_observation(own_cards, board_cards)
     encoded[0] = calculate_pot_odds(pot, to_call)
-    encoded[1 + hand_category(own_cards, board_cards)] = 1.0
-    encoded[10:14] = encode_draws(own_cards, board_cards)
+    encoded[1 + _hand_category_from_valid_cards(own_cards, board_cards)] = 1.0
+    encoded[10:14] = _encode_draws_from_valid_cards(own_cards, board_cards)
     encoded[14:18] = encode_board_texture(board_cards)
     return encoded

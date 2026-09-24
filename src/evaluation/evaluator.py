@@ -9,7 +9,9 @@ from __future__ import annotations
 import csv
 import json
 import math
+import multiprocessing
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,50 @@ EVALUATION_SUITES = ("random", "passive", "mixed", "phase1_mix")
 MIXED_ACTION_WEIGHTS = np.array([0.20, 0.45, 0.18, 0.12, 0.05])
 PHASE1_OPPONENTS = tuple(config.PHASE1_OPPONENT_WEIGHTS)
 PHASE1_WEIGHTS = np.array(tuple(config.PHASE1_OPPONENT_WEIGHTS.values()))
+
+
+def _evaluate_suite_in_worker(
+    evaluator_class,
+    num_tournaments: int,
+    model_path: Path,
+    training_phase: int | str,
+    report_dir: Path,
+    suite: str,
+    stage: str,
+    step: int,
+    seed_base: int,
+    learner_mode: str,
+) -> tuple[str, "EvaluationResult"]:
+    """Policz jeden niezależny zestaw w osobnym procesie CPU.
+
+    Proces tworzy własne środowisko i sam wczytuje politykę. Dzięki temu nie
+    współdzielimy mutowalnego stanu turnieju, a seedy pozostają identyczne jak
+    w wersji sekwencyjnej.
+    """
+    torch.set_num_threads(config.EVAL_WORKER_TORCH_THREADS)
+    evaluator = evaluator_class(
+        num_tournaments=num_tournaments,
+        model_path=model_path,
+        training_phase=training_phase,
+        report_dir=report_dir,
+    )
+    policy = evaluator.load_policy() if learner_mode == "model" else None
+    if learner_mode == "model" and policy is None:
+        raise RuntimeError(f"Nie udało się wczytać polityki z {model_path}")
+    result = evaluator._evaluate_suite(
+        policy,
+        suite=suite,
+        stage=stage,
+        step=step,
+        seed_base=seed_base,
+        learner_mode=learner_mode,
+    )
+    return suite, result
+
+
+def _evaluate_suite_worker_unpack(arguments) -> tuple[str, "EvaluationResult"]:
+    """Adapter wymagany przez `ProcessPoolExecutor.map` dla wielu argumentów."""
+    return _evaluate_suite_in_worker(*arguments)
 
 
 @dataclass
@@ -304,27 +350,60 @@ class BasePokerEvaluator:
         if learner_mode not in {"model", "random"}:
             raise ValueError(f"Nieznany tryb badanego gracza: {learner_mode}")
 
-        policy = self.load_policy() if learner_mode == "model" else None
-        if learner_mode == "model" and policy is None:
-            return {}
-
         print(
             f"\nEwaluacja {self.algorithm_name.upper()} ({stage}, krok {step:,}) "
             f"na urządzeniu {self.device}."
         )
-        results = {
-            suite: self._evaluate_suite(
-                policy,
-                suite=suite,
-                stage=stage,
-                step=step,
+        suite_arguments = [
+            (
+                self.__class__,
+                self.num_tournaments,
+                self.model_path,
+                self.training_phase,
+                self.report_dir,
+                suite,
+                stage,
+                step,
                 # Zestawy dostają rozłączne seedy, a kolejne checkpointy zawsze
                 # używają dokładnie tych samych zakresów.
-                seed_base=seed_base + suite_index * 10_000,
-                learner_mode=learner_mode,
+                seed_base + suite_index * 10_000,
+                learner_mode,
             )
             for suite_index, suite in enumerate(suites)
-        }
+        ]
+
+        if len(suites) > 1 and config.EVAL_NUM_WORKERS > 1:
+            worker_count = min(config.EVAL_NUM_WORKERS, len(suites))
+            # `spawn` jest najbezpieczniejszy na macOS i nie dziedziczy stanu
+            # PyTorch ani środowisk treningowych po procesie głównym.
+            context = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(
+                max_workers=worker_count,
+                mp_context=context,
+            ) as executor:
+                evaluated = executor.map(
+                    _evaluate_suite_worker_unpack,
+                    suite_arguments,
+                )
+                results = dict(evaluated)
+        else:
+            # W trybie sekwencyjnym wczytujemy model tylko raz. Jest to
+            # szybsze dla pojedynczego zestawu i stanowi lekki fallback dla
+            # środowisk, w których procesy potomne są niedostępne.
+            policy = self.load_policy() if learner_mode == "model" else None
+            if learner_mode == "model" and policy is None:
+                return {}
+            results = {
+                suite: self._evaluate_suite(
+                    policy,
+                    suite=suite,
+                    stage=stage,
+                    step=step,
+                    seed_base=seed_base + suite_index * 10_000,
+                    learner_mode=learner_mode,
+                )
+                for suite_index, suite in enumerate(suites)
+            }
 
         if save_report:
             self._save_report(results, stage=stage, step=step)

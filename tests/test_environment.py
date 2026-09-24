@@ -56,6 +56,23 @@ class TexasHoldemTournamentTest(unittest.TestCase):
         )
         self.assertEqual(self.env.action_space(agent).n, 5)
 
+    def test_observation_cache_is_reused_only_until_the_next_action(self) -> None:
+        """Cache nie może ukryć zmiany puli, historii ani aktualnego gracza."""
+        first_agent = self.env.agent_selection
+        first = self.env.observe(first_agent)
+        repeated = self.env.observe(first_agent)
+        self.assertIs(first, repeated)
+
+        legal_actions = np.flatnonzero(first["action_mask"])
+        self.env.step(int(legal_actions[0]))
+
+        # Ruch czyści cały cache. Następna obserwacja musi zostać policzona ze
+        # stanu po akcji, nawet gdy ponownie obserwuje ten sam gracz.
+        self.assertEqual(self.env._observation_cache, {})
+        next_agent = self.env.agent_selection
+        refreshed = self.env.observe(next_agent)
+        self.assertIsNot(refreshed, first)
+
     def test_step_updates_public_action_history(self) -> None:
         acting_player = self.env.agent_selection
 

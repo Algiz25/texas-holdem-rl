@@ -46,6 +46,11 @@ class TexasHoldemTournament(AECEnv):
             agent: Box(low=-np.inf, high=np.inf, shape=(self.observation_size,), dtype=np.float32)  
             for agent in self.possible_agents
         }
+        # PettingZoo pobiera obserwację przez `last()`, a następnie `step()`
+        # ponownie sprawdza maskę tej samej decyzji. Cache zapobiega dwukrotnemu
+        # liczeniu układu, drawów, historii i statystyk bez zmiany zwracanych
+        # danych. Jest czyszczony po każdej zmianie stanu gry.
+        self._observation_cache = {}
 
     def observation_space(self, agent):
         return self.observation_spaces[agent]
@@ -70,6 +75,7 @@ class TexasHoldemTournament(AECEnv):
         self.completed_hands = 0
         self.hand_wins = {agent: 0 for agent in self.possible_agents}
         self.finishing_positions = {}
+        self._observation_cache.clear()
         
         self.terminations = {agent: False for agent in self.agents}
         self.truncations = {agent: False for agent in self.agents}
@@ -83,6 +89,7 @@ class TexasHoldemTournament(AECEnv):
         self._start_new_hand()
 
     def _start_new_hand(self):
+        self._observation_cache.clear()
         # Aktywni agenci to tacy, którzy są w środowisku i nie mają flagi terminations
         self.active_agents = [a for a in self.agents if not self.terminations.get(a, False)]
         num_active = len(self.active_agents)
@@ -160,12 +167,18 @@ class TexasHoldemTournament(AECEnv):
         ]
 
     def observe(self, agent):
+        cached = self._observation_cache.get(agent)
+        if cached is not None:
+            return cached
+
         # Jeśli agent zbankrutował (został wykluczony ze start_new_hand), zwracamy pustą maskę
         if self.terminations.get(agent, False) or agent not in self.active_agents:
-            return {
+            result = {
                 "observation": np.zeros(self.observation_size, dtype=np.float32),
                 "action_mask": np.zeros(config.ACTION_SPACE, dtype=np.int8)
             }
+            self._observation_cache[agent] = result
+            return result
 
         # RLCard numeruje wyłącznie graczy obecnych w aktualnym rozdaniu.
         # Zamieniamy ten indeks z powrotem na stałe nazwy player_0...player_3.
@@ -223,10 +236,12 @@ class TexasHoldemTournament(AECEnv):
             opponent_stats=self.opponent_stats,
         )
             
-        return {
+        result = {
             "observation": observation,
             "action_mask": action_mask
         }
+        self._observation_cache[agent] = result
+        return result
 
     def _get_showdown_result(self):
         """Zwróć uczestników i zwycięzców publicznie widocznego showdownu."""
@@ -265,16 +280,21 @@ class TexasHoldemTournament(AECEnv):
         if self.terminations.get(self.agent_selection, False) or self.truncations.get(self.agent_selection, False):
             if self.debug:
                 print(f'{self.agent_selection} is dead and will be removed')
+            self._observation_cache.clear()
             self._was_dead_step(action)
             return
 
         # --- ZABEZPIECZENIE PRZED BUGIEM RLCARD ---
         current_obs = self.observe(self.agent_selection)
-        if current_obs["action_mask"][action] == 0:
+        if not 0 <= action < config.ACTION_SPACE or current_obs["action_mask"][action] == 0:
             # Jeśli kolektor losowy wybierze złą akcję, wymuszamy FOLD (0) 
             # (lub 1 dla CHECK_CALL)
-            action = 0 
+            action = 0
         # ------------------------------------------
+
+        # Od tego miejsca akcja zmienia publiczny stan. Żadna obserwacja
+        # obliczona przed ruchem nie może zostać użyta przy następnej decyzji.
+        self._observation_cache.clear()
 
         self._clear_rewards()
         if self.debug:

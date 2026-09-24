@@ -32,10 +32,12 @@ class DQNPhaseOneConfigurationTests(unittest.TestCase):
 
     def test_macbook_uses_benchmarked_parallelism(self) -> None:
         self.assertEqual(config.DQN_NUM_TRAIN_ENVS, 8)
-        self.assertEqual(config.DQN_NUM_TEST_ENVS, 8)
+        self.assertEqual(config.DQN_NUM_TEST_ENVS, 1)
         self.assertEqual(config.TORCH_NUM_THREADS, 1)
         self.assertEqual(config.TORCH_NUM_INTEROP_THREADS, 1)
         self.assertEqual(config.DQN_BUFFER_WARMUP, 25_000)
+        self.assertEqual(config.EVAL_NUM_WORKERS, 4)
+        self.assertEqual(config.EVAL_SMOKE_TOURNAMENTS, 1)
 
 
 if __name__ == "__main__":

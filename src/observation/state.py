@@ -196,6 +196,7 @@ def encode_base_observation(
         board_cards,
         pot,
         to_call,
+        cards_are_validated=True,
     )
 
     return observation
