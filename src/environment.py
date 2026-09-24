@@ -1,11 +1,20 @@
-import rlcard
-import numpy as np
-from pettingzoo import AECEnv
-from pettingzoo.utils import agent_selector
-from rlcard.games.limitholdem import PlayerStatus
-from gymnasium.spaces import Box, Discrete
 import random
+
+import numpy as np
+import rlcard
+from gymnasium.spaces import Box, Discrete
+from pettingzoo import AECEnv
+from rlcard.games.limitholdem import PlayerStatus
+from rlcard.games.limitholdem.utils import compare_hands
+
 import config
+from observation.actions import ActionHistory
+from observation.opponent_stats import OpponentStatsTracker
+from observation.state import (
+    PlayerSnapshot,
+    calculate_to_call,
+    encode_base_observation,
+)
 
 action_mapping = {
     0: "fold",
@@ -42,6 +51,9 @@ class TexasHoldemTournament(AECEnv):
         self.agents = self.possible_agents[:]
         # Turniejowe żetony przechowujemy pod nazwami agentów, co ułatwi odczyt po bankructwach
         self.tournament_chips = {agent: self.starting_chips for agent in self.possible_agents}
+        # Statystyki przeciwników obowiązują przez cały turniej, dlatego zerujemy
+        # je przy resecie turnieju, a nie przy każdym nowym rozdaniu.
+        self.opponent_stats = OpponentStatsTracker(self.possible_agents)
         self.dealer_idx = 0
         
         self.terminations = {agent: False for agent in self.agents}
@@ -94,9 +106,35 @@ class TexasHoldemTournament(AECEnv):
             if self.debug:
                 print(f"{agent_name} żetony: {player.remained_chips}, na kupce: {player.in_chips}")
 
+        # RLCard przechowuje żądaną wysokość calla, nawet gdy krótki stack nie
+        # był w stanie wpłacić całej kwoty. Własna baza ulicy pozwala wyliczać
+        # rzeczywiście pobrane żetony z player.in_chips.
+        self.tracked_street = self.rlcard_env.game.stage.value
+        self.street_start_contributions = [0.0] * num_active
+
+        # Historia akcji dotyczy wyłącznie bieżącego rozdania. Używa stałych
+        # nazw wszystkich czterech miejsc, również gdy ktoś już zbankrutował.
+        self.action_history = ActionHistory(self.possible_agents)
+        self.opponent_stats.start_hand(self.active_agents)
 
         # Wskazujemy pierwszego gracza w nowym rozdaniu używając nazwy zmapowanej z RLCard
         self.agent_selection = self.active_agents[rlcard_player_id]
+
+    def _street_contributions(self):
+        """Zwróć faktyczne, a nie żądane przez RLCard, wpłaty na ulicy."""
+        current_street = self.rlcard_env.game.stage.value
+        players = self.rlcard_env.game.players
+
+        if current_street != self.tracked_street:
+            self.tracked_street = current_street
+            self.street_start_contributions = [
+                float(player.in_chips) for player in players
+            ]
+
+        return [
+            float(player.in_chips) - self.street_start_contributions[index]
+            for index, player in enumerate(players)
+        ]
 
     def observe(self, agent):
         # Jeśli agent zbankrutował (został wykluczony ze start_new_hand), zwracamy pustą maskę
@@ -106,54 +144,99 @@ class TexasHoldemTournament(AECEnv):
                 "action_mask": np.zeros(config.ACTION_SPACE, dtype=np.int8)
             }
 
-        # Pobieramy stan na podstawie indeksu w aktywnym rozdaniu
+        # RLCard numeruje wyłącznie graczy obecnych w aktualnym rozdaniu.
+        # Zamieniamy ten indeks z powrotem na stałe nazwy player_0...player_3.
         rlcard_idx = self.active_agents.index(agent)
         state = self.rlcard_env.get_state(rlcard_idx)
+        raw_obs = state["raw_obs"]
         
         action_mask = np.zeros(config.ACTION_SPACE, dtype=np.int8)
         for action_id in state['legal_actions']:
             action_mask[action_id] = 1
 
-        total_chips_in_play = self.starting_chips * self.num_players
+        # Zaczynamy od czterech stałych miejsc. Zbankrutowani gracze pozostają
+        # widoczni jako nieaktywni, dzięki czemu znaczenie indeksów się nie zmienia.
+        player_states = {
+            player_name: PlayerSnapshot(
+                stack=0,
+                street_contribution=0,
+                hand_contribution=0,
+                active=False,
+            )
+            for player_name in self.possible_agents
+        }
 
-        obs = np.zeros(self.observation_size, dtype=np.float32)
-        raw_obs = state['raw_obs']
+        street_contributions = self._street_contributions()
+        for index, player_name in enumerate(self.active_agents):
+            player = self.rlcard_env.game.players[index]
+            player_states[player_name] = PlayerSnapshot(
+                stack=float(player.remained_chips),
+                street_contribution=street_contributions[index],
+                hand_contribution=float(player.in_chips),
+                active=True,
+                folded=player.status == PlayerStatus.FOLDED,
+                all_in=player.status == PlayerStatus.ALLIN,
+            )
 
-        # 0-51: Karty (kopiujemy z domyślnego wektora RLCard)
-        obs[0:52] = state['obs'][0:52]
-        
-        # 52: Nasze żetony na kupce (znormalizowane)
-        obs[52] = state['obs'][52] / total_chips_in_play
+        own_player = self.rlcard_env.game.players[rlcard_idx]
+        to_call = calculate_to_call(
+            highest_street_contribution=max(street_contributions),
+            own_street_contribution=street_contributions[rlcard_idx],
+            own_stack=own_player.remained_chips,
+        )
 
-        # 53: Maksymalny zakład na stole (znormalizowane)
-        obs[53] = state['obs'][53] / total_chips_in_play
-        
-        # 54: Ile brakuje do sprawdzenia (To Call) (znormalizowane)
-        obs[54] = (state['obs'][53] - state['obs'][52]) / total_chips_in_play
-
-        # 55: Całkowita pula (znormalizowane)
-        obs[55] = float(raw_obs['pot']) / total_chips_in_play
-        
-        # 55-58: Faza gry (One-Hot)
-        stage_val = raw_obs['stage'].value
-        if stage_val <= 3:
-            obs[56 + stage_val] = 1.0
-
-        # 59-62: Stacki aktywnych graczy ułożone relatywnie
-        stakes = raw_obs['stakes']
-        current = raw_obs['current_player']
-        num_active = len(self.active_agents)
-        for i in range(num_active):
-            obs[60 + i] = float(stakes[(current + i) % num_active]) / total_chips_in_play
-
-        # 64-67: Pozycja gracza względem Dealera (One-Hot do 4 graczy)
-        relative_position = (current - self.dealer_idx) % num_active
-        obs[64 + relative_position] = 1.0
+        observation = encode_base_observation(
+            observer=agent,
+            seats=self.possible_agents,
+            player_states=player_states,
+            button=self.active_agents[self.dealer_idx],
+            street=raw_obs["stage"].value,
+            pot=float(raw_obs["pot"]),
+            to_call=to_call,
+            chip_scale=self.starting_chips * self.num_players,
+            own_cards=raw_obs["hand"],
+            board_cards=raw_obs["public_cards"],
+            action_history=self.action_history,
+            opponent_stats=self.opponent_stats,
+        )
             
         return {
-            "observation": obs,
+            "observation": observation,
             "action_mask": action_mask
         }
+
+    def _get_showdown_result(self):
+        """Zwróć uczestników i zwycięzców publicznie widocznego showdownu."""
+        game = self.rlcard_env.game
+        contenders = [
+            index
+            for index, player in enumerate(game.players)
+            if player.status in (PlayerStatus.ALIVE, PlayerStatus.ALLIN)
+        ]
+
+        # Jedyny pozostały gracz wygrywa przez foldy, a nie przez showdown.
+        if len(contenders) < 2 or len(game.public_cards) != 5:
+            return (), ()
+
+        hands = [
+            (
+                [card.get_index() for card in player.hand + game.public_cards]
+                if index in contenders
+                else None
+            )
+            for index, player in enumerate(game.players)
+        ]
+        winner_mask = compare_hands(hands)
+
+        showdown_players = tuple(
+            self.active_agents[index] for index in contenders
+        )
+        winners = tuple(
+            self.active_agents[index]
+            for index, won in enumerate(winner_mask)
+            if won
+        )
+        return showdown_players, winners
 
     def step(self, action):
         if self.terminations.get(self.agent_selection, False) or self.truncations.get(self.agent_selection, False):
@@ -176,11 +259,59 @@ class TexasHoldemTournament(AECEnv):
 
         # Tłumaczymy wybór agenta AEC na ruch na planszy RLCard
         rlcard_idx = self.active_agents.index(self.agent_selection)
+
+        # Kontekst zapisujemy przed wykonaniem ruchu. Po rlcard_env.step()
+        # biblioteka może już przejść na następną ulicę i wyzerować wkłady.
+        player = self.rlcard_env.game.players[rlcard_idx]
+        street = self.rlcard_env.game.stage.value
+        street_contributions = self._street_contributions()
+        highest_contribution = max(street_contributions)
+        to_call = calculate_to_call(
+            highest_street_contribution=highest_contribution,
+            own_street_contribution=street_contributions[rlcard_idx],
+            own_stack=player.remained_chips,
+        )
+        all_in_increases_bet = (
+            action == 4
+            and street_contributions[rlcard_idx] + player.remained_chips
+            > highest_contribution
+        )
+
+        # Blind nie jest raisem. Fold-to-raise otrzymuje okazję dopiero wtedy,
+        # gdy na tej ulicy zapisano prawdziwą agresywną akcję.
+        facing_raise = (
+            to_call > 0
+            and self.action_history.raise_counts[street] > 0
+        )
+        self.action_history.record(
+            self.agent_selection,
+            action,
+            street,
+            to_call=to_call,
+            all_in_increases_bet=all_in_increases_bet,
+        )
+        self.opponent_stats.record_action(
+            self.agent_selection,
+            action,
+            street,
+            to_call=to_call,
+            facing_raise=facing_raise,
+            all_in_increases_bet=all_in_increases_bet,
+        )
+
         _, next_rlcard_id = self.rlcard_env.step(action)
         
         if self.rlcard_env.is_over():
             if self.debug:
                 print("Hand is over")
+            # Zatwierdzamy statystyki dopiero po zakończeniu rozdania. Dzięki
+            # temu niedokończone VPIP/PFR nie trafiają do bieżącej obserwacji.
+            showdown_players, winners = self._get_showdown_result()
+            self.opponent_stats.finish_hand(
+                showdown_players=showdown_players,
+                winners=winners,
+            )
+
             payoffs = self.rlcard_env.get_payoffs()
             if self.debug:
                 print(f"Wynik rozdania (dla aktywnych): {payoffs}")

@@ -3,9 +3,15 @@ import torch.nn as nn
 from tianshou.data import Batch
 from tianshou.algorithm.modelfree.reinforce import ProbabilisticActorPolicy
 
+import config
+
 class MaskedActor(nn.Module):
     """Sieć Actora: zwraca logity dla dozwolonych akcji"""
-    def __init__(self, state_shape=68, action_shape=5):
+    def __init__(
+        self,
+        state_shape=config.OBSERVATION_SIZE,
+        action_shape=config.ACTION_SPACE,
+    ):
         super().__init__()
         self.model = nn.Sequential(
             nn.Linear(state_shape, 256),
@@ -56,7 +62,7 @@ class MaskedActor(nn.Module):
 
 class Critic(nn.Module):
     """Sieć Critica: zwraca pojedynczą wartość (Value) przewidującą sumę nagród z danego stanu"""
-    def __init__(self, state_shape=68):
+    def __init__(self, state_shape=config.OBSERVATION_SIZE):
         super().__init__()
         self.model = nn.Sequential(
             nn.Linear(state_shape, 256),

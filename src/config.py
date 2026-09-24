@@ -1,8 +1,10 @@
+from observation.schema import OBSERVATION_SIZE
+
+
 # ZMIENNE ŚRODOWISKOWE
 # póki co jedyna dostępna faza to 1
 TRAINING_PHASE = 1
 ACTION_SPACE = 5    # nie zmieniać
-OBSERVATION_SIZE = 68
 STARTING_CHIPS = 200
 NUM_PLAYERS = 4     # nie zmieniać
 
@@ -56,6 +58,5 @@ PPO_STEPS_PER_EPOCH = 4096 # TODO: sprawdzić czy nie za mało
 
 # EWALUACJA
 MAX_STEPS_PER_TOURNAMENT = 1000 # ile akcji mogą podjąć w testowym turnieju (żeby nie trwały w nieskończoność)
-
 
 

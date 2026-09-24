@@ -1,8 +1,10 @@
 import unittest
 
 import numpy as np
+from rlcard.games.limitholdem import PlayerStatus
 
 from environment import TexasHoldemTournament
+from observation import schema
 
 
 class TexasHoldemTournamentTest(unittest.TestCase):
@@ -13,16 +15,75 @@ class TexasHoldemTournamentTest(unittest.TestCase):
     def test_observation_and_action_mask_shapes(self) -> None:
         observation = self.env.observe(self.env.agent_selection)
 
-        self.assertEqual(observation["observation"].shape, (68,))
+        self.assertEqual(
+            observation["observation"].shape,
+            (schema.OBSERVATION_SIZE,),
+        )
         self.assertEqual(observation["action_mask"].shape, (5,))
         self.assertEqual(observation["observation"].dtype, np.float32)
         self.assertGreater(int(observation["action_mask"].sum()), 0)
 
+        vector = observation["observation"]
+        self.assertEqual(float(vector[schema.OWN_CARDS].sum()), 2.0)
+        self.assertEqual(float(vector[schema.BOARD_CARDS].sum()), 0.0)
+        np.testing.assert_array_equal(vector[schema.PLAYER_ACTIVE], [1, 1, 1, 1])
+        np.testing.assert_array_equal(vector[schema.STREET], [1, 0, 0, 0])
+        self.assertGreaterEqual(float(vector.min()), 0.0)
+        self.assertLessEqual(float(vector.max()), 1.0)
+
     def test_spaces_match_environment_contract(self) -> None:
         agent = self.env.agent_selection
 
-        self.assertEqual(self.env.observation_space(agent).shape, (68,))
+        self.assertEqual(
+            self.env.observation_space(agent).shape,
+            (schema.OBSERVATION_SIZE,),
+        )
         self.assertEqual(self.env.action_space(agent).n, 5)
+
+    def test_step_updates_public_action_history(self) -> None:
+        acting_player = self.env.agent_selection
+
+        # CHECK_CALL jest zawsze legalne w RLCard; zależnie od sytuacji oznacza
+        # ono check albo dopłatę, ale identyfikator ostatniej akcji pozostaje 1.
+        self.env.step(schema.ACTION_CHECK_CALL)
+
+        self.assertEqual(
+            self.env.action_history.last_actions[acting_player],
+            schema.ACTION_CHECK_CALL,
+        )
+
+    def test_short_all_in_uses_only_chips_actually_paid(self) -> None:
+        # RLCard ustawia round.raised na pełną kwotę calla także wtedy, gdy
+        # gracz ma krótszy stack. Encoder opiera się dlatego na in_chips.
+        player = self.env.rlcard_env.game.players[1]
+        player.in_chips = 13
+        player.remained_chips = 0
+        player.status = PlayerStatus.ALLIN
+        self.env.rlcard_env.game.round.raised[1] = 29
+
+        contributions = self.env._street_contributions()
+        self.assertEqual(contributions[1], 13)
+
+    def test_completed_hands_update_opponent_statistics(self) -> None:
+        # Kolejne foldy szybko kończą rozdania bez uzależniania testu od kart.
+        for agent in self.env.agent_iter(max_iter=10):
+            observation, _, terminated, truncated, _ = self.env.last()
+            if terminated or truncated:
+                action = None
+            else:
+                legal_actions = np.flatnonzero(observation["action_mask"])
+                action = (
+                    schema.ACTION_FOLD
+                    if schema.ACTION_FOLD in legal_actions
+                    else int(legal_actions[0])
+                )
+            self.env.step(action)
+
+        observed_hands = [
+            statistics.observed_hands
+            for statistics in self.env.opponent_stats.players.values()
+        ]
+        self.assertGreater(min(observed_hands), 0)
 
 
 if __name__ == "__main__":

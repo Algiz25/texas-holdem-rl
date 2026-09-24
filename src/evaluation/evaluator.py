@@ -4,6 +4,7 @@ import torch
 from tianshou.data import Batch
 import config
 from environment import TexasHoldemTournament
+from observation import schema
 
 action_mapping = {
     0: "FOLD", 1: "CHECK/CALL", 2: "RAISE HALF", 3: "RAISE POT", 4: "ALL IN"
@@ -84,7 +85,11 @@ class BasePokerEvaluator:
                     elif action in [2, 3, 4]:
                         stats['raises'] += 1
                         
-                    is_preflop = (obs[55] == 1.0)
+                    # Faza jest blokiem one-hot. Nazwany indeks chroni evaluator
+                    # przed zależnością od starego, 68-elementowego wektora.
+                    is_preflop = (
+                        obs[schema.STREET.start + schema.STREET_PREFLOP] == 1.0
+                    )
                     if is_preflop:
                         stats['preflop_opportunities'] += 1
                         if action != 0:
