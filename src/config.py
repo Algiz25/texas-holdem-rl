@@ -94,4 +94,14 @@ PPO_MAX_EPOCHS = 100
 PPO_STEPS_PER_EPOCH = 4096 # TODO: sprawdzić czy nie za mało
 
 # EWALUACJA
-MAX_STEPS_PER_TOURNAMENT = 1000 # ile akcji mogą podjąć w testowym turnieju (żeby nie trwały w nieskończoność)
+
+# Jeden „mecz” ewaluacyjny trwa najwyżej 100 rozdań. To ważne zwłaszcza dla
+# botów Check/Call: potrafią grać bardzo długo i poprzedni limit 1000 akcji
+# ucinał większość turniejów w przypadkowym momencie. Stała liczba rozdań daje
+# porównywalną próbkę do głównej metryki bb/100.
+EVAL_MAX_HANDS_PER_MATCH = 100
+
+# Osobny, wysoki bezpiecznik chroni przed błędem środowiska powodującym
+# nieskończoną pętlę. Osiągnięcie tego limitu jest raportowane jako awaria,
+# w przeciwieństwie do planowego zakończenia po 100 rozdaniach.
+EVAL_MAX_ACTIONS_PER_MATCH = 5_000

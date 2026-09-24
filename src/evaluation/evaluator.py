@@ -58,6 +58,8 @@ class EvaluationResult:
     seed_base: int
     tournaments: int
     completed_tournaments: int
+    hand_limited_matches: int
+    action_limited_matches: int
     truncated_tournaments: int
     hands: int
     decisions: int
@@ -97,6 +99,8 @@ class EvaluationAccumulator:
 
     def __init__(self) -> None:
         self.completed_tournaments = 0
+        self.hand_limited_matches = 0
+        self.action_limited_matches = 0
         self.truncated_tournaments = 0
         self.hands = 0
         self.decisions = 0
@@ -145,10 +149,19 @@ class EvaluationAccumulator:
         env: TexasHoldemTournament,
         learner: str,
         *,
-        completed: bool,
+        stop_reason: str,
     ) -> None:
-        self.completed_tournaments += completed
-        self.truncated_tournaments += not completed
+        if stop_reason == "completed":
+            self.completed_tournaments += 1
+        elif stop_reason == "hand_limit":
+            self.hand_limited_matches += 1
+        elif stop_reason == "action_limit":
+            self.action_limited_matches += 1
+            self.truncated_tournaments += 1
+        else:
+            raise ValueError(f"Nieznany powód zakończenia ewaluacji: {stop_reason}")
+
+        completed = stop_reason == "completed"
         player_stats = env.opponent_stats.players[learner]
         # Po odpadnięciu ucznia turniej może trwać dalej. Do bb/100 liczymy
         # wyłącznie rozdania, w których badany gracz faktycznie uczestniczył.
@@ -201,6 +214,8 @@ class EvaluationAccumulator:
             seed_base=seed_base,
             tournaments=tournaments,
             completed_tournaments=self.completed_tournaments,
+            hand_limited_matches=self.hand_limited_matches,
+            action_limited_matches=self.action_limited_matches,
             truncated_tournaments=self.truncated_tournaments,
             hands=self.hands,
             decisions=self.decisions,
@@ -315,7 +330,7 @@ class BasePokerEvaluator:
             self._save_report(results, stage=stage, step=step)
         self._print_results(results)
         if save_report:
-            print(f"Raporty: {self.report_dir / 'evaluations.csv'}\n")
+            print(f"Raporty: {self.report_dir / 'evaluations_v2.csv'}\n")
         return results
 
     def _evaluate_suite(
@@ -340,7 +355,7 @@ class BasePokerEvaluator:
             self.env.reset(seed=tournament_seed)
 
             step_count = 0
-            completed = True
+            stop_reason = "completed"
             for agent in self.env.agent_iter():
                 observation, _, termination, truncation, _ = self.env.last()
                 if termination or truncation:
@@ -371,11 +386,22 @@ class BasePokerEvaluator:
 
                 self.env.step(action)
                 step_count += 1
-                if step_count >= config.MAX_STEPS_PER_TOURNAMENT:
-                    completed = False
+
+                # Kończymy planowo po stałej liczbie rozdań. Wynik żetonowy i
+                # wszystkie statystyki z tych rozdań pozostają ważne; jedynie
+                # win-rate całego turnieju nie jest wtedy dostępny.
+                if self.env.completed_hands >= config.EVAL_MAX_HANDS_PER_MATCH:
+                    stop_reason = "hand_limit"
+                    break
+                if step_count >= config.EVAL_MAX_ACTIONS_PER_MATCH:
+                    stop_reason = "action_limit"
                     break
 
-            accumulator.record_tournament(self.env, learner, completed=completed)
+            accumulator.record_tournament(
+                self.env,
+                learner,
+                stop_reason=stop_reason,
+            )
 
         return accumulator.finish(
             stage=stage,
@@ -451,7 +477,10 @@ class BasePokerEvaluator:
         step: int,
     ) -> None:
         self.report_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = self.report_dir / "evaluations.csv"
+        # Druga wersja raportu rozróżnia prawidłowe zakończenie po limicie
+        # rozdań od awaryjnego limitu akcji. Nie dopisujemy nowych kolumn do
+        # starego CSV, bo powstałby plik z niezgodnym nagłówkiem.
+        csv_path = self.report_dir / "evaluations_v2.csv"
         rows = [result.csv_row() for result in results.values()]
         write_header = not csv_path.exists()
         with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
@@ -475,9 +504,21 @@ class BasePokerEvaluator:
     def _print_results(results: dict[str, EvaluationResult]) -> None:
         print("\n=== WYNIKI EWALUACJI ===")
         for suite, result in results.items():
+            # Win-rate turniejowy nie istnieje, jeśli wszystkie mecze zostały
+            # planowo zakończone po 100 rozdaniach. Pokazanie 0% sugerowałoby
+            # przegraną, dlatego w terminalu wyświetlamy wtedy "n/d".
+            tournament_win_rate = (
+                f"{result.tournament_win_rate:6.1%}"
+                if result.completed_tournaments
+                else "   n/d"
+            )
             print(
                 f"{suite:12s} | {result.bb_per_100:8.2f} bb/100 | "
-                f"turnieje {result.tournament_win_rate:6.1%} | "
-                f"ręce {result.hands:5d} | decyzje {result.decisions:6d}"
+                f"turnieje {tournament_win_rate} | "
+                f"ręce {result.hands:5d} | decyzje {result.decisions:6d} | "
+                f"pełne/100-rąk/awarie "
+                f"{result.completed_tournaments}/"
+                f"{result.hand_limited_matches}/"
+                f"{result.action_limited_matches}"
             )
         print()

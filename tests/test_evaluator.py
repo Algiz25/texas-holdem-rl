@@ -53,7 +53,7 @@ class EvaluationAccumulatorTests(unittest.TestCase):
             finishing_positions={"player_0": 1.0},
             opponent_stats=SimpleNamespace(players={"player_0": player_stats}),
         )
-        accumulator.record_tournament(env, "player_0", completed=True)
+        accumulator.record_tournament(env, "player_0", stop_reason="completed")
         result = accumulator.finish(
             stage="validation",
             step=100_000,
@@ -68,6 +68,38 @@ class EvaluationAccumulatorTests(unittest.TestCase):
         self.assertEqual(result.vpip, 0.4)
         self.assertEqual(result.pfr, 0.2)
         self.assertAlmostEqual(result.showdown_win_rate, 2 / 3)
+
+    def test_hand_limit_is_not_reported_as_evaluation_failure(self) -> None:
+        accumulator = EvaluationAccumulator()
+        player_stats = SimpleNamespace(
+            observed_hands=100,
+            vpip_hands=20,
+            pfr_hands=10,
+            showdowns=5,
+            showdown_wins=2,
+        )
+        env = SimpleNamespace(
+            hand_wins={"player_0": 10},
+            tournament_chips={"player_0": 210, "player_1": 190},
+            starting_chips=200,
+            finishing_positions={"player_0": 0.0},
+            opponent_stats=SimpleNamespace(players={"player_0": player_stats}),
+        )
+
+        accumulator.record_tournament(env, "player_0", stop_reason="hand_limit")
+        result = accumulator.finish(
+            stage="validation",
+            step=0,
+            checkpoint=Path("checkpoint.pth"),
+            opponent_suite="passive",
+            seed_base=123,
+            tournaments=1,
+        )
+
+        self.assertEqual(result.hand_limited_matches, 1)
+        self.assertEqual(result.action_limited_matches, 0)
+        self.assertEqual(result.truncated_tournaments, 0)
+        self.assertEqual(result.hands, 100)
 
 
 class EvaluationOpponentTests(unittest.TestCase):
@@ -115,7 +147,7 @@ class EvaluationOpponentTests(unittest.TestCase):
                 step=100_000,
             )
 
-            self.assertTrue((Path(directory) / "evaluations.csv").exists())
+            self.assertTrue((Path(directory) / "evaluations_v2.csv").exists())
             self.assertTrue(
                 (Path(directory) / "validation_step_000100000.json").exists()
             )
