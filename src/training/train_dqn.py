@@ -66,10 +66,20 @@ class DQNPokerTrainer(BasePokerTrainer):
             target_update_freq=0
         )
 
-        try:
-            frozen_opponent.policy.load_state_dict(torch.load(DQN_CHECKPOINT_DIR / 'best.pth', map_location=self.device, weights_only=True))
-        except FileNotFoundError:
-            pass
+        # W fazie 1 zamrożony model nie jest przeciwnikiem, dlatego nie
+        # wczytujemy starego checkpointu. Dawny model 68-wejściowy nie pasuje
+        # do obecnej sieci z 222 obserwacjami.
+        if self.phase_name in {"self", "advanced"}:
+            try:
+                frozen_opponent.policy.load_state_dict(
+                    torch.load(
+                        DQN_CHECKPOINT_DIR / "best.pth",
+                        map_location=self.device,
+                        weights_only=True,
+                    )
+                )
+            except FileNotFoundError:
+                pass
 
         # Inne agenty
         random_agent = MARLRandomDiscreteMaskedOffPolicyAlgorithm(action_space=self.env.action_space)
@@ -129,14 +139,21 @@ class DQNPokerTrainer(BasePokerTrainer):
         # Funkcje trenujące z logiką DQN (Epsilon Decay)
         # eps definiuje jak często podejmowane są losowe decyzje
         # TODO: można tu coś pokombinować, ale raczej jest git
+        latest_step = {"value": 0}
+
         def train_fn(epoch, env_step):
-            if self.training_phase == "RANDOM":
+            latest_step["value"] = env_step
+            if self.phase_name in {"1", "random"}:
                 eps = max(config.DQN_RAND_PHASE_EPS_MIN, config.DQN_EPS_MAX - env_step / (config.DQN_RAND_PHASE_EPS_DECAY * self.total_steps))
             else:
                 eps = max(config.DQN_OTHER_PHASE_EPS_MIN, config.DQN_OTHER_PHASE_EPS_MAX - env_step / (config.DQN_OTHER_PHASE_EPS_DECAY * self.total_steps))
             dqn_learner.policy.set_eps_training(eps)
-            
-            self.run_periodic_opponent_update(epoch, dqn_learner.policy, policy_opponent)
+
+            self.run_periodic_evaluation(
+                env_step=env_step,
+                learner_policy=dqn_learner.policy,
+                opponent_policy=policy_opponent,
+            )
 
         def test_fn(epoch, env_step):
             dqn_learner.policy.set_eps_inference(0.0)
@@ -147,18 +164,23 @@ class DQNPokerTrainer(BasePokerTrainer):
             epoch_num_steps=self.steps_per_epoch,
             training_collector=train_collector,
             test_collector=test_collector,
-            test_step_num_episodes=config.OPPONENT_UPDATE_INTERVAL,
+            test_step_num_episodes=config.EVAL_SMOKE_TOURNAMENTS,
             batch_size=config.DQN_BATCH_SIZE,
             training_fn=train_fn,
             test_fn=test_fn,
-            save_best_fn=self.save_best_model,
             multi_agent_return_reduction=lambda ret: ret[:, 0]
         )
 
+        # Pomiar przed treningiem daje uczciwy punkt odniesienia dla wszystkich
+        # późniejszych checkpointów tej samej, losowo zainicjalizowanej sieci.
+        self.run_initial_evaluation(learner_policy=dqn_learner.policy)
         print("Rozpoczęcie treningu DQN...")
         result = OffPolicyTrainer(algorithm=marl_algo, params=trainer_params).run()
         print(f"\n=== Trening Zakończony ===\nNajlepsza nagroda: {result.best_reward}")
-        torch.save(dqn_learner.policy.state_dict(), DQN_CHECKPOINT_DIR / 'final.pth')
+        self.run_final_evaluation(
+            learner_policy=dqn_learner.policy,
+            env_step=latest_step["value"] or self.total_steps,
+        )
 
 if __name__ == "__main__":
     trainer = DQNPokerTrainer(

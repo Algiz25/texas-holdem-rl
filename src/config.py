@@ -10,10 +10,25 @@ NUM_PLAYERS = 4     # nie zmieniać
 
 # ZMIENNE TRENINGOWE
 
-# co ile epok przeciwnicy zamieniają się na nowszych - # TODO: może warto zwiększyć
-# jest to też co ile epok wypisywane są statystyki dla prostowy
-OPPONENT_UPDATE_INTERVAL = 10
-NUM_TOURNAMENTS_PER_EVAL = 10   # liczba turnieji rozegranych do zyskania statystyk
+# Krótki test techniczny jest wykonywany przez trenera po każdej epoce. Ma
+# wykrywać awarie, a nie wybierać najlepszy model (10 turniejów to zbyt mała
+# próba, aby wynik pokerowy był wiarygodny).
+EVAL_SMOKE_TOURNAMENTS = 10
+
+# Pełna, porównywalna walidacja uruchamia się co 100 tys. akcji środowiska.
+# Każdy checkpoint gra osobno z trzema zestawami botów i z mieszanką fazy 1.
+EVAL_INTERVAL_STEPS = 100_000
+EVAL_TOURNAMENTS_PER_SUITE = 50
+
+# Test końcowy korzysta z większej próby i innego zakresu seedów niż
+# walidacja. Dzięki temu nie wybieramy modelu pod konkretne rozdania.
+FINAL_EVAL_TOURNAMENTS_PER_SUITE = 500
+EVAL_VALIDATION_SEED = 20_260
+EVAL_FINAL_SEED = 90_260
+
+# RLCard używa blindów 1/2. Jawna wartość big blinda pozwala raportować
+# standardową pokerową metrykę bb/100.
+BIG_BLIND = 2
 
 # ZMIENNE TRENINGOWE DQN
 DQN_LEARNING_RATE = 1e-4
@@ -58,5 +73,4 @@ PPO_STEPS_PER_EPOCH = 4096 # TODO: sprawdzić czy nie za mało
 
 # EWALUACJA
 MAX_STEPS_PER_TOURNAMENT = 1000 # ile akcji mogą podjąć w testowym turnieju (żeby nie trwały w nieskończoność)
-
 

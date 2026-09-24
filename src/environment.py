@@ -48,6 +48,10 @@ class TexasHoldemTournament(AECEnv):
         return self.action_spaces[agent]
 
     def reset(self, seed=None, options=None):
+        # Seed jest opcjonalny: trening pozostaje losowy, natomiast ewaluacja
+        # może odtwarzać te same rozdania dla kolejnych checkpointów.
+        self._tournament_seed = seed
+        self._hand_number = 0
         self.agents = self.possible_agents[:]
         # Turniejowe żetony przechowujemy pod nazwami agentów, co ułatwi odczyt po bankructwach
         self.tournament_chips = {agent: self.starting_chips for agent in self.possible_agents}
@@ -55,6 +59,9 @@ class TexasHoldemTournament(AECEnv):
         # je przy resecie turnieju, a nie przy każdym nowym rozdaniu.
         self.opponent_stats = OpponentStatsTracker(self.possible_agents)
         self.dealer_idx = 0
+        self.completed_hands = 0
+        self.hand_wins = {agent: 0 for agent in self.possible_agents}
+        self.finishing_positions = {}
         
         self.terminations = {agent: False for agent in self.agents}
         self.truncations = {agent: False for agent in self.agents}
@@ -83,6 +90,11 @@ class TexasHoldemTournament(AECEnv):
                 'dealer_id': self.dealer_idx,
             }
         )
+        if self._tournament_seed is not None:
+            # Każde rozdanie dostaje inne, ale powtarzalne ziarno. Samo
+            # utworzenie nowego środowiska RLCard resetowałoby generator.
+            self.rlcard_env.seed(self._tournament_seed + self._hand_number)
+        self._hand_number += 1
         _, rlcard_player_id = self.rlcard_env.reset()
 
         if self.debug:
@@ -313,6 +325,10 @@ class TexasHoldemTournament(AECEnv):
             )
 
             payoffs = self.rlcard_env.get_payoffs()
+            self.completed_hands += 1
+            for index, payoff in enumerate(payoffs):
+                if payoff > 0:
+                    self.hand_wins[self.active_agents[index]] += 1
             if self.debug:
                 print(f"Wynik rozdania (dla aktywnych): {payoffs}")
 
@@ -323,15 +339,27 @@ class TexasHoldemTournament(AECEnv):
                 self.rewards[agent_name] = float(payoff) / self.starting_chips # znormalizowana nagroda
                 
             # Weryfikacja bankructw po rozliczeniu żetonów
+            active_before = len(self.active_agents)
             active_count = 0
+            newly_eliminated = []
             for agent in self.active_agents:
                 if self.tournament_chips[agent] <= 0:
                     self.terminations[agent] = True
+                    newly_eliminated.append(agent)
                 else:
                     active_count += 1
+
+            if newly_eliminated:
+                # Gracze odpadający w tym samym rozdaniu zajmują ex aequo
+                # średnią z przypadających im miejsc.
+                tied_position = (active_count + 1 + active_before) / 2
+                for agent in newly_eliminated:
+                    self.finishing_positions[agent] = tied_position
                     
             if active_count <= 1:
                 # Ostatni na polu bitwy, turniej zakończony
+                winner = max(self.tournament_chips, key=self.tournament_chips.get)
+                self.finishing_positions[winner] = 1.0
                 for agent in self.agents:
                     self.terminations[agent] = True
                     # self.rewards[agent] = float(self.tournament_chips[agent] - self.starting_chips) # nagroda na koniec turnieju - może warto dodać większą za wygranie?

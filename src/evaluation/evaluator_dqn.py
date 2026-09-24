@@ -6,6 +6,8 @@ from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
 import config
 
 class DQNEvaluator(BasePokerEvaluator):
+    algorithm_name = "dqn"
+
     def load_policy(self):
         net = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(self.device)
         policy = DiscreteQLearningPolicy(
@@ -23,7 +25,16 @@ class DQNEvaluator(BasePokerEvaluator):
         except FileNotFoundError:
             print(f"BŁĄD: Nie znaleziono pliku {self.model_path}.")
             return None
+        except RuntimeError as error:
+            print(
+                f"BŁĄD: Checkpoint {self.model_path} nie pasuje do aktualnej "
+                f"architektury ({config.OBSERVATION_SIZE} obserwacje): {error}"
+            )
+            return None
 
 if __name__ == "__main__":
-    dqn_eval = DQNEvaluator(num_tournaments=100, model_path=DQN_CHECKPOINT_DIR / 'best.pth', training_phase="RANDOM")
+    dqn_eval = DQNEvaluator(
+        num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+        model_path=DQN_CHECKPOINT_DIR / "best.pth",
+    )
     dqn_eval.evaluate()

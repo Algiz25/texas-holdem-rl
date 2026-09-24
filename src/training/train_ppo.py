@@ -85,10 +85,17 @@ class PPOPokerTrainer(BasePokerTrainer):
             eps_clip=0.2
         )
 
-        try:
-            frozen_opponent.policy.load_state_dict(torch.load(PPO_CHECKPOINT_DIR / 'best.pth', map_location=self.device, weights_only=True))
-        except FileNotFoundError:
-            pass
+        if self.phase_name in {"self", "advanced"}:
+            try:
+                frozen_opponent.policy.load_state_dict(
+                    torch.load(
+                        PPO_CHECKPOINT_DIR / "best.pth",
+                        map_location=self.device,
+                        weights_only=True,
+                    )
+                )
+            except FileNotFoundError:
+                pass
 
         # Inne agenty
         random_agent = RandomOnPolicyAgent(action_space=self.env.action_space)
@@ -143,8 +150,15 @@ class PPOPokerTrainer(BasePokerTrainer):
         )
 
         # Funkcje trenujące z logiką PPO
+        latest_step = {"value": 0}
+
         def train_fn(epoch, env_step):
-            self.run_periodic_opponent_update(epoch, ppo_learner.policy, policy_opponent)
+            latest_step["value"] = env_step
+            self.run_periodic_evaluation(
+                env_step=env_step,
+                learner_policy=ppo_learner.policy,
+                opponent_policy=policy_opponent,
+            )
 
         def test_fn(epoch, env_step):
             pass
@@ -158,17 +172,20 @@ class PPOPokerTrainer(BasePokerTrainer):
             batch_size=config.PPO_BATCH_SIZE,
             training_collector=train_collector,
             test_collector=test_collector,
-            test_step_num_episodes=config.OPPONENT_UPDATE_INTERVAL,
+            test_step_num_episodes=config.EVAL_SMOKE_TOURNAMENTS,
             training_fn=train_fn,
             test_fn=test_fn,
-            save_best_fn=self.save_best_model,
             multi_agent_return_reduction=lambda ret: ret[:, 0]
         )
 
+        self.run_initial_evaluation(learner_policy=ppo_learner.policy)
         print("Rozpoczęcie treningu PPO...")
         result = OnPolicyTrainer(algorithm=marl_algo, params=trainer_params).run()
         print(f"\n=== Trening PPO Zakończony ===\nNajlepsza nagroda: {result.best_reward}")
-        torch.save(ppo_learner.policy.state_dict(), PPO_CHECKPOINT_DIR / 'final.pth')
+        self.run_final_evaluation(
+            learner_policy=ppo_learner.policy,
+            env_step=latest_step["value"] or self.total_steps,
+        )
 
 if __name__ == "__main__":
     trainer = PPOPokerTrainer(

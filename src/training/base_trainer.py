@@ -1,68 +1,176 @@
+"""Wspólna infrastruktura treningu oraz harmonogram rzetelnej ewaluacji."""
+
+from __future__ import annotations
+
+import shutil
+
 import torch
 from tianshou.env import PettingZooEnv, SubprocVectorEnv
-from tianshou.data import Collector, VectorReplayBuffer
+
 import config
 from environment import TexasHoldemTournament
 from paths import DQN_CHECKPOINT_DIR, PPO_CHECKPOINT_DIR, ensure_output_directories
 
+
 def make_poker_env():
-    return PettingZooEnv(TexasHoldemTournament(num_players=4, starting_chips=200))
+    return PettingZooEnv(
+        TexasHoldemTournament(
+            num_players=config.NUM_PLAYERS,
+            starting_chips=config.STARTING_CHIPS,
+        )
+    )
+
 
 class BasePokerTrainer:
-    def __init__(self, algo_name, training_phase, evaluator_class, 
-                 num_train_envs, num_test_envs, max_epochs, steps_per_epoch):
+    def __init__(
+        self,
+        algo_name,
+        training_phase,
+        evaluator_class,
+        num_train_envs,
+        num_test_envs,
+        max_epochs,
+        steps_per_epoch,
+    ):
         self.algo_name = algo_name
         self.training_phase = training_phase
         self.evaluator_class = evaluator_class
-        
         self.max_epochs = max_epochs
         self.steps_per_epoch = steps_per_epoch
         self.total_steps = max_epochs * steps_per_epoch
         self.observation_size = config.OBSERVATION_SIZE
-        
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.last_opponent_update = 0
-        self.checkpoint_dir = DQN_CHECKPOINT_DIR if algo_name == "dqn" else PPO_CHECKPOINT_DIR
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.checkpoint_dir = (
+            DQN_CHECKPOINT_DIR if algo_name == "dqn" else PPO_CHECKPOINT_DIR
+        )
+        self.next_evaluation_step = config.EVAL_INTERVAL_STEPS
+        self.best_validation_score = float("-inf")
         ensure_output_directories()
 
-        print(f"Inicjalizacja środowisk PettingZoo dla algorytmu {self.algo_name.upper()}...")
+        print(f"Inicjalizacja środowisk PettingZoo dla {self.algo_name.upper()}...")
         self.env = make_poker_env()
         self.train_envs = SubprocVectorEnv([make_poker_env for _ in range(num_train_envs)])
         self.test_envs = SubprocVectorEnv([make_poker_env for _ in range(num_test_envs)])
 
-    def save_best_model(self, algo):
-        """Zapisuje model ucznia, gdy testy wykażą najwyższą średnią nagrodę."""
-        learner = algo.get_algorithm("player_0")
-        model_path = self.checkpoint_dir / "best.pth"
-        torch.save(learner.policy.state_dict(), model_path)
-        print(f"\n[ZAPIS] Zapisano nowy najlepszy model do '{model_path}'")
+    @property
+    def phase_name(self) -> str:
+        """Jednolita nazwa działa zarówno dla fazy `1`, jak i późniejszych nazw."""
+        return str(self.training_phase).lower()
 
-    def run_periodic_opponent_update(self, epoch, learner_policy, opponent_policy):
-        """Cykliczna ewaluacja i nadpisywanie wag przeciwników co 10 epok."""
-        if epoch > 0 and epoch % config.OPPONENT_UPDATE_INTERVAL == 0 and epoch != self.last_opponent_update:
-            model_path = self.checkpoint_dir / f'{self.training_phase.lower()}_epoch_{epoch}.pth'
-            torch.save(learner_policy.state_dict(), model_path)
-            
-            # Ewaluacja
-            evaluator = self.evaluator_class(
-                num_tournaments=config.NUM_TOURNAMENTS_PER_EVAL,
-                model_path=model_path,
+    def run_periodic_evaluation(
+        self,
+        *,
+        env_step: int,
+        learner_policy,
+        opponent_policy=None,
+    ) -> None:
+        """Co 100 tys. akcji oceń checkpoint na stałych zestawach rozdań."""
+        if env_step < self.next_evaluation_step:
+            return
+
+        checkpoint_path = self.checkpoint_dir / f"step_{env_step:09d}.pth"
+        torch.save(learner_policy.state_dict(), checkpoint_path)
+        shutil.copy2(checkpoint_path, self.checkpoint_dir / "latest.pth")
+
+        evaluator = self.evaluator_class(
+            num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
+            model_path=checkpoint_path,
+            training_phase=self.training_phase,
+        )
+        results = evaluator.evaluate(
+            stage="validation",
+            step=env_step,
+            seed_base=config.EVAL_VALIDATION_SEED,
+        )
+        # Mieszanka fazy 1 jest głównym środowiskiem walidacyjnym. bb/100
+        # wykorzystuje wszystkie rozdania, więc jest stabilniejsze od samego
+        # procentu wygranych turniejów.
+        phase_result = results.get("phase1_mix")
+        if phase_result and phase_result.bb_per_100 > self.best_validation_score:
+            self.best_validation_score = phase_result.bb_per_100
+            shutil.copy2(checkpoint_path, self.checkpoint_dir / "best.pth")
+            print(
+                f"[ZAPIS] Nowy najlepszy model: "
+                f"{phase_result.bb_per_100:.2f} bb/100."
+            )
+
+        # Mechanizm jest gotowy na późniejsze fazy self-play. Faza liczbowa nie
+        # wywołuje już błędu `.lower()`, który wcześniej zatrzymywał trening.
+        if self.phase_name in {"self", "advanced"} and opponent_policy is not None:
+            opponent_policy.load_state_dict(
+                torch.load(
+                    checkpoint_path,
+                    map_location=self.device,
+                    weights_only=True,
+                )
+            )
+
+        # Jeżeli callback został wywołany po przekroczeniu progu, przechodzimy
+        # do pierwszego przyszłego punktu zamiast powtarzać tę samą ewaluację.
+        while self.next_evaluation_step <= env_step:
+            self.next_evaluation_step += config.EVAL_INTERVAL_STEPS
+
+    def run_initial_evaluation(self, *, learner_policy) -> None:
+        """Zapisz punkt odniesienia przed wykonaniem pierwszej aktualizacji sieci."""
+        checkpoint_path = self.checkpoint_dir / "step_000000000.pth"
+        torch.save(learner_policy.state_dict(), checkpoint_path)
+        evaluator = self.evaluator_class(
+            num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
+            model_path=checkpoint_path,
+            training_phase=self.training_phase,
+        )
+        results = evaluator.evaluate(
+            stage="baseline_untrained",
+            step=0,
+            seed_base=config.EVAL_VALIDATION_SEED,
+        )
+        # Losowy uczeń jest stałym punktem odniesienia niezależnym od
+        # inicjalizacji sieci. Liczymy go raz, na identycznych rozdaniach.
+        evaluator.evaluate(
+            stage="baseline_random",
+            step=0,
+            seed_base=config.EVAL_VALIDATION_SEED,
+            learner_mode="random",
+        )
+        phase_result = results.get("phase1_mix")
+        if phase_result:
+            self.best_validation_score = phase_result.bb_per_100
+            shutil.copy2(checkpoint_path, self.checkpoint_dir / "best.pth")
+            shutil.copy2(checkpoint_path, self.checkpoint_dir / "latest.pth")
+
+    def run_final_evaluation(self, *, learner_policy, env_step: int) -> None:
+        """Zapisz ostatni model i wykonaj duży test na nieużywanych seedach."""
+        final_path = self.checkpoint_dir / "final.pth"
+        torch.save(learner_policy.state_dict(), final_path)
+        shutil.copy2(final_path, self.checkpoint_dir / "latest.pth")
+        evaluator = self.evaluator_class(
+            num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+            model_path=final_path,
+            training_phase=self.training_phase,
+        )
+        evaluator.evaluate(
+            stage="final_last",
+            step=env_step,
+            seed_base=config.EVAL_FINAL_SEED,
+        )
+
+        # Najlepszy checkpoint walidacyjny może pochodzić ze środka treningu.
+        # Oceniamy go na tych samych, nowych seedach co model końcowy, aby ich
+        # porównanie nie zależało od szczęścia w rozdaniach.
+        best_path = self.checkpoint_dir / "best.pth"
+        if best_path.exists() and best_path != final_path:
+            best_evaluator = self.evaluator_class(
+                num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+                model_path=best_path,
                 training_phase=self.training_phase,
             )
-            evaluator.evaluate()
-
-            # Aktualizacja przeciwników w trybach zaawansowanych
-            if self.training_phase in ["SELF", "ADVANCED"]:
-                try:
-                    opponent_policy.load_state_dict(
-                        torch.load(model_path, map_location=self.device, weights_only=True)
-                    )
-                    print(f"\n---> [EPOKA {epoch}] Przeciwnicy zaktualizowali wagi! <---")
-                except FileNotFoundError:
-                    print(f"\n---> [EPOKA {epoch}] Brak pliku, wrogowie grają dalej starymi wagami. <---")
-            
-            self.last_opponent_update = epoch
+            best_evaluator.evaluate(
+                stage="final_best",
+                step=env_step,
+                seed_base=config.EVAL_FINAL_SEED,
+            )
 
     def setup_and_train(self):
-        """Metoda abstrakcyjna - musi być zaimplementowana przez podklasy."""
+        """Metoda abstrakcyjna implementowana przez trener DQN albo PPO."""
         raise NotImplementedError
