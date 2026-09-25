@@ -1,3 +1,5 @@
+"""Config dla tego pliku to app_config. Rozgrywa 1 turniej z wybranymi graczami i zapisuje jego przebieg do pliku .json"""
+
 import json
 import time
 import torch
@@ -7,6 +9,7 @@ from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
 from torch.distributions import Categorical
 
 import config
+import app.app_config
 from environment import TexasHoldemTournament
 from models import MaskedActor, Critic, CPUActionActorPolicy
 from opponents import PassivePolicy, AggressivePolicy, SeededMixedPolicy
@@ -26,8 +29,11 @@ CATEGORY_NAMES = {
     4: "Straight", 5: "Flush", 6: "Full House", 7: "Four of a kind", 8: "Straight Flush"
 }
 
-def load_agent(agent_type, env, model_path=None, device='cpu'):
+def load_agent(agent_cfg: dict, env, device="CPU"):
     """Inicjalizuje odpowiednią politykę w zależności od zadanego typu bota."""
+
+    agent_type = agent_cfg["type"]
+    seed = agent_cfg.get("seed", None)
     action_space = env.action_space("player_0")
     observation_space = env.observation_space("player_0")
 
@@ -39,7 +45,7 @@ def load_agent(agent_type, env, model_path=None, device='cpu'):
             observation_space=observation_space,
             eps_inference=0.0
         )
-        policy.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        policy.load_state_dict(torch.load(agent_cfg.get("path", None), map_location=device, weights_only=True))
         policy.eval()
         return policy
     elif agent_type == "ppo":
@@ -50,12 +56,12 @@ def load_agent(agent_type, env, model_path=None, device='cpu'):
             actor=actor, dist_fn=dist_fn, action_space=action_space,
             observation_space=observation_space, action_scaling=False
         )
-        policy.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        policy.load_state_dict(torch.load(agent_cfg.get("path", None), map_location=device, weights_only=True))
         policy.eval()
         return policy
     elif agent_type == "passive": return PassivePolicy(action_space=action_space)
     elif agent_type == "aggressive": return AggressivePolicy(action_space=action_space)
-    elif agent_type == "mixed": return SeededMixedPolicy(action_space=action_space)
+    elif agent_type == "mixed": return SeededMixedPolicy(action_space=action_space, seed=seed)
     elif agent_type == "random": return "random"
     else: raise ValueError(f"Nieznany typ agenta: {agent_type}")
 
@@ -68,12 +74,12 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
     
     players = {}
     for seat, cfg in seats_config.items():
-        players[seat] = load_agent(cfg["type"], env, cfg.get("path"), device)
+        players[seat] = load_agent(cfg, env, device)
 
     history = {
         "tournament_config": {
             "starting_chips": config.STARTING_CHIPS,
-            "players": {k: v["type"] for k, v in seats_config.items()}
+            "players": {k: v.get("name", v["type"]) for k, v in seats_config.items()}
         },
         "hands": []
     }
@@ -217,12 +223,18 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
         action_mask = observation['action_mask']
         legal_actions = [i for i, valid in enumerate(action_mask) if valid == 1]
         
-        q_values = {}
+        # q_values = {}
         if policy == "random":
             action = int(np.random.choice(legal_actions))
         else:
             obs_vec = observation['observation']
-            batch = Batch(obs=Batch(observation=np.expand_dims(obs_vec, axis=0), action_mask=np.expand_dims(action_mask, axis=0)), info={})
+            batch = Batch(
+                obs=Batch(
+                    observation=np.expand_dims(obs_vec, axis=0),
+                    action_mask=np.expand_dims(action_mask, axis=0)
+                ),
+                info={}
+            )
             result = policy(batch)
             action = int(result.act[0])
             
@@ -230,12 +242,12 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
             if action_mask[action] == 0:
                 action = 0 if action_mask[0] == 1 else int(np.random.choice(legal_actions))
                 
-            # Wyciąganie Q-Values / Logits dla analityki RL
-            if hasattr(result, 'logits'):
-                logits = result.logits[0].detach().cpu().numpy() if torch.is_tensor(result.logits) else result.logits[0]
-                for a_idx, is_legal in enumerate(action_mask):
-                    if is_legal:
-                        q_values[ACTION_NAMES[a_idx]] = float(logits[a_idx])
+            # # Wyciąganie Q-Values / Logits dla analityki RL
+            # if hasattr(result, 'logits'):
+            #     logits = result.logits[0].detach().cpu().numpy() if torch.is_tensor(result.logits) else result.logits[0]
+            #     for a_idx, is_legal in enumerate(action_mask):
+            #         if is_legal:
+            #             q_values[ACTION_NAMES[a_idx]] = float(logits[a_idx])
 
         board = [get_card_str(c) for c in env.rlcard_env.game.public_cards]
         pot = float(sum(p.in_chips for p in env.rlcard_env.game.players))
@@ -253,8 +265,8 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
             "action_str": ACTION_NAMES[action],
             "amount": 0.0, 
             "pot_before_action": pot,
-            "board": board,
-            "q_values": q_values
+            "board": board
+            # "q_values": q_values
         }
         current_hand_data["events"].append(event)
         
@@ -285,11 +297,4 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
 
 
 if __name__ == "__main__":
-    TABLE_CONFIG = {
-        "player_0": {"type": "mixed"},
-        "player_1": {"type": "mixed"},
-        "player_2": {"type": "aggressive"},
-        "player_3": {"type": "passive"}
-    }
-    
-    record_tournament(TABLE_CONFIG, output_file="tournament_history.json")
+    record_tournament(app.app_config.TABLE_CONFIG, output_file=app.app_config.OUTPUT_LOCATION / app.app_config.OUPUT_FILE_NAME)
