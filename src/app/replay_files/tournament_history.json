@@ -1,0 +1,718 @@
+{
+    "tournament_config": {
+        "starting_chips": 200,
+        "players": {
+            "player_0": "DQN",
+            "player_1": "PPO",
+            "player_2": "Miesiany miesiany",
+            "player_3": "Pasywny"
+        }
+    },
+    "hands": [
+        {
+            "hand_number": 1,
+            "active_players": [
+                "player_0",
+                "player_1",
+                "player_2",
+                "player_3"
+            ],
+            "initial_tournament_chips": {
+                "player_0": 200.0,
+                "player_1": 200.0,
+                "player_2": 200.0,
+                "player_3": 200.0
+            },
+            "hole_cards": {
+                "player_0": [
+                    "H5",
+                    "H9"
+                ],
+                "player_1": [
+                    "D3",
+                    "S5"
+                ],
+                "player_2": [
+                    "D5",
+                    "D8"
+                ],
+                "player_3": [
+                    "DA",
+                    "H6"
+                ]
+            },
+            "events": [
+                {
+                    "player": "player_1",
+                    "action": -1,
+                    "action_str": "Small Blind",
+                    "amount": 1.0,
+                    "pot_before_action": 0.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_2",
+                    "action": -1,
+                    "action_str": "Big Blind",
+                    "amount": 2.0,
+                    "pot_before_action": 1.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 2.0,
+                    "pot_before_action": 3.0,
+                    "board": []
+                },
+                {
+                    "player": "player_0",
+                    "action": 3,
+                    "action_str": "RAISE POT",
+                    "amount": 5.0,
+                    "pot_before_action": 5.0,
+                    "board": []
+                },
+                {
+                    "player": "player_1",
+                    "action": 4,
+                    "action_str": "ALL IN",
+                    "amount": 199.0,
+                    "pot_before_action": 10.0,
+                    "board": []
+                },
+                {
+                    "player": "player_2",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 198.0,
+                    "pot_before_action": 209.0,
+                    "board": []
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 198.0,
+                    "pot_before_action": 407.0,
+                    "board": []
+                },
+                {
+                    "player": "player_0",
+                    "action": 0,
+                    "action_str": "FOLD",
+                    "amount": 0.0,
+                    "pot_before_action": 605.0,
+                    "board": []
+                }
+            ],
+            "showdown": {
+                "players": [
+                    "player_1",
+                    "player_2",
+                    "player_3"
+                ],
+                "winners": [
+                    "player_3"
+                ],
+                "final_board": [
+                    "S6",
+                    "DT",
+                    "CT",
+                    "SK",
+                    "S3"
+                ],
+                "hands": {
+                    "player_1": {
+                        "cards": [
+                            "D3",
+                            "S5"
+                        ],
+                        "category": "Two Pair"
+                    },
+                    "player_2": {
+                        "cards": [
+                            "D5",
+                            "D8"
+                        ],
+                        "category": "Pair"
+                    },
+                    "player_3": {
+                        "cards": [
+                            "DA",
+                            "H6"
+                        ],
+                        "category": "Two Pair"
+                    }
+                }
+            },
+            "final_tournament_chips": {
+                "player_0": 195.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 605.0
+            }
+        },
+        {
+            "hand_number": 2,
+            "active_players": [
+                "player_0",
+                "player_3"
+            ],
+            "initial_tournament_chips": {
+                "player_0": 195.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 605.0
+            },
+            "hole_cards": {
+                "player_0": [
+                    "C9",
+                    "DJ"
+                ],
+                "player_3": [
+                    "HQ",
+                    "H2"
+                ]
+            },
+            "events": [
+                {
+                    "player": "player_0",
+                    "action": -1,
+                    "action_str": "Small Blind",
+                    "amount": 1.0,
+                    "pot_before_action": 0.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_3",
+                    "action": -1,
+                    "action_str": "Big Blind",
+                    "amount": 2.0,
+                    "pot_before_action": 1.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_0",
+                    "action": 4,
+                    "action_str": "ALL IN",
+                    "amount": 194.0,
+                    "pot_before_action": 3.0,
+                    "board": []
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 193.0,
+                    "pot_before_action": 197.0,
+                    "board": []
+                }
+            ],
+            "showdown": {
+                "players": [
+                    "player_0",
+                    "player_3"
+                ],
+                "winners": [
+                    "player_0"
+                ],
+                "final_board": [
+                    "CA",
+                    "S8",
+                    "H4",
+                    "HK",
+                    "CJ"
+                ],
+                "hands": {
+                    "player_0": {
+                        "cards": [
+                            "C9",
+                            "DJ"
+                        ],
+                        "category": "Pair"
+                    },
+                    "player_3": {
+                        "cards": [
+                            "HQ",
+                            "H2"
+                        ],
+                        "category": "High Card"
+                    }
+                }
+            },
+            "final_tournament_chips": {
+                "player_0": 390.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 410.0
+            }
+        },
+        {
+            "hand_number": 3,
+            "active_players": [
+                "player_0",
+                "player_3"
+            ],
+            "initial_tournament_chips": {
+                "player_0": 390.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 410.0
+            },
+            "hole_cards": {
+                "player_0": [
+                    "S9",
+                    "D4"
+                ],
+                "player_3": [
+                    "C3",
+                    "CK"
+                ]
+            },
+            "events": [
+                {
+                    "player": "player_3",
+                    "action": -1,
+                    "action_str": "Small Blind",
+                    "amount": 1.0,
+                    "pot_before_action": 0.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_0",
+                    "action": -1,
+                    "action_str": "Big Blind",
+                    "amount": 2.0,
+                    "pot_before_action": 1.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 1.0,
+                    "pot_before_action": 3.0,
+                    "board": []
+                },
+                {
+                    "player": "player_0",
+                    "action": 3,
+                    "action_str": "RAISE POT",
+                    "amount": 4.0,
+                    "pot_before_action": 4.0,
+                    "board": []
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 4.0,
+                    "pot_before_action": 8.0,
+                    "board": []
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 0.0,
+                    "pot_before_action": 12.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA"
+                    ]
+                },
+                {
+                    "player": "player_0",
+                    "action": 2,
+                    "action_str": "RAISE HALF POT",
+                    "amount": 6.0,
+                    "pot_before_action": 12.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA"
+                    ]
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 6.0,
+                    "pot_before_action": 18.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA"
+                    ]
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 0.0,
+                    "pot_before_action": 24.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA",
+                        "H6"
+                    ]
+                },
+                {
+                    "player": "player_0",
+                    "action": 3,
+                    "action_str": "RAISE POT",
+                    "amount": 24.0,
+                    "pot_before_action": 24.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA",
+                        "H6"
+                    ]
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 24.0,
+                    "pot_before_action": 48.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA",
+                        "H6"
+                    ]
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 0.0,
+                    "pot_before_action": 72.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA",
+                        "H6",
+                        "CJ"
+                    ]
+                },
+                {
+                    "player": "player_0",
+                    "action": 0,
+                    "action_str": "FOLD",
+                    "amount": 0.0,
+                    "pot_before_action": 72.0,
+                    "board": [
+                        "C9",
+                        "HJ",
+                        "HA",
+                        "H6",
+                        "CJ"
+                    ]
+                }
+            ],
+            "showdown": {
+                "players": [
+                    "player_3"
+                ],
+                "winners": [
+                    "player_3"
+                ],
+                "final_board": [
+                    "C9",
+                    "HJ",
+                    "HA",
+                    "H6",
+                    "CJ"
+                ],
+                "hands": {
+                    "player_3": {
+                        "cards": [
+                            "C3",
+                            "CK"
+                        ],
+                        "category": "Pair"
+                    }
+                }
+            },
+            "final_tournament_chips": {
+                "player_0": 354.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 446.0
+            }
+        },
+        {
+            "hand_number": 4,
+            "active_players": [
+                "player_0",
+                "player_3"
+            ],
+            "initial_tournament_chips": {
+                "player_0": 354.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 446.0
+            },
+            "hole_cards": {
+                "player_0": [
+                    "C5",
+                    "D3"
+                ],
+                "player_3": [
+                    "D9",
+                    "S4"
+                ]
+            },
+            "events": [
+                {
+                    "player": "player_0",
+                    "action": -1,
+                    "action_str": "Small Blind",
+                    "amount": 1.0,
+                    "pot_before_action": 0.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_3",
+                    "action": -1,
+                    "action_str": "Big Blind",
+                    "amount": 2.0,
+                    "pot_before_action": 1.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_0",
+                    "action": 0,
+                    "action_str": "FOLD",
+                    "amount": 0.0,
+                    "pot_before_action": 3.0,
+                    "board": []
+                }
+            ],
+            "showdown": {
+                "players": [
+                    "player_3"
+                ],
+                "winners": [
+                    "player_3"
+                ],
+                "final_board": [],
+                "hands": {
+                    "player_3": {
+                        "cards": [
+                            "D9",
+                            "S4"
+                        ],
+                        "category": "High Card"
+                    }
+                }
+            },
+            "final_tournament_chips": {
+                "player_0": 353.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 447.0
+            }
+        },
+        {
+            "hand_number": 5,
+            "active_players": [
+                "player_0",
+                "player_3"
+            ],
+            "initial_tournament_chips": {
+                "player_0": 353.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 447.0
+            },
+            "hole_cards": {
+                "player_0": [
+                    "SQ",
+                    "D3"
+                ],
+                "player_3": [
+                    "H4",
+                    "S6"
+                ]
+            },
+            "events": [
+                {
+                    "player": "player_3",
+                    "action": -1,
+                    "action_str": "Small Blind",
+                    "amount": 1.0,
+                    "pot_before_action": 0.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_0",
+                    "action": -1,
+                    "action_str": "Big Blind",
+                    "amount": 2.0,
+                    "pot_before_action": 1.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 1.0,
+                    "pot_before_action": 3.0,
+                    "board": []
+                },
+                {
+                    "player": "player_0",
+                    "action": 0,
+                    "action_str": "FOLD",
+                    "amount": 0.0,
+                    "pot_before_action": 4.0,
+                    "board": []
+                }
+            ],
+            "showdown": {
+                "players": [
+                    "player_3"
+                ],
+                "winners": [
+                    "player_3"
+                ],
+                "final_board": [
+                    "DT",
+                    "S9",
+                    "H9",
+                    "C7",
+                    "H6"
+                ],
+                "hands": {
+                    "player_3": {
+                        "cards": [
+                            "H4",
+                            "S6"
+                        ],
+                        "category": "Two Pair"
+                    }
+                }
+            },
+            "final_tournament_chips": {
+                "player_0": 351.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 449.0
+            }
+        },
+        {
+            "hand_number": 6,
+            "active_players": [
+                "player_0",
+                "player_3"
+            ],
+            "initial_tournament_chips": {
+                "player_0": 351.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 449.0
+            },
+            "hole_cards": {
+                "player_0": [
+                    "C3",
+                    "S9"
+                ],
+                "player_3": [
+                    "CK",
+                    "HK"
+                ]
+            },
+            "events": [
+                {
+                    "player": "player_0",
+                    "action": -1,
+                    "action_str": "Small Blind",
+                    "amount": 1.0,
+                    "pot_before_action": 0.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_3",
+                    "action": -1,
+                    "action_str": "Big Blind",
+                    "amount": 2.0,
+                    "pot_before_action": 1.0,
+                    "board": [],
+                    "q_values": {}
+                },
+                {
+                    "player": "player_0",
+                    "action": 4,
+                    "action_str": "ALL IN",
+                    "amount": 350.0,
+                    "pot_before_action": 3.0,
+                    "board": []
+                },
+                {
+                    "player": "player_3",
+                    "action": 1,
+                    "action_str": "CHECK / CALL",
+                    "amount": 349.0,
+                    "pot_before_action": 353.0,
+                    "board": []
+                }
+            ],
+            "showdown": {
+                "players": [
+                    "player_0",
+                    "player_3"
+                ],
+                "winners": [
+                    "player_3"
+                ],
+                "final_board": [
+                    "HJ",
+                    "CQ",
+                    "S3",
+                    "H4",
+                    "C7"
+                ],
+                "hands": {
+                    "player_0": {
+                        "cards": [
+                            "C3",
+                            "S9"
+                        ],
+                        "category": "Pair"
+                    },
+                    "player_3": {
+                        "cards": [
+                            "CK",
+                            "HK"
+                        ],
+                        "category": "Pair"
+                    }
+                }
+            },
+            "final_tournament_chips": {
+                "player_0": 0.0,
+                "player_1": 0.0,
+                "player_2": 0.0,
+                "player_3": 800.0
+            }
+        }
+    ]
+}
