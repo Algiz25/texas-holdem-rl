@@ -1,4 +1,5 @@
 import random
+import uuid
 
 import numpy as np
 import rlcard
@@ -30,16 +31,43 @@ class TexasHoldemTournament(AECEnv):
         self.num_players = num_players
         self.starting_chips = starting_chips
         self.debug = debug
+        # Identyfikator instancji odróżnia równoległe środowiska. Polityki
+        # przeciwników łączą go z numerem resetu, aby zachować wylosowany styl
+        # przez cały jeden turniej, bez mieszania ośmiu procesów treningowych.
+        self._environment_id = uuid.uuid4().hex
+        self._tournament_number = 0
         
         self.possible_agents = [f"player_{i}" for i in range(num_players)]
         self.agents = self.possible_agents[:]
 
         self.observation_size = config.OBSERVATION_SIZE # Wielkość wekotra obserwacji
-        self.action_spaces = {agent: Discrete(config.ACTION_SPACE) for agent in self.possible_agents} 
-        self.observation_spaces = {
-            agent: Box(low=-np.inf, high=np.inf, shape=(self.observation_size,), dtype=np.float32)  
+        self.action_spaces = {
+            agent: Discrete(config.ACTION_SPACE)
             for agent in self.possible_agents
         }
+        self.observation_spaces = {
+            # Wszystkie pola 222-elementowego wektora są one-hot, flagami albo
+            # wartościami znormalizowanymi do 0-1. Dokładna przestrzeń pomaga
+            # Gymnasium i kolektorowi wykryć błąd kodowania zamiast akceptować
+            # dowolną wartość nieskończoną.
+            agent: Box(
+                low=0.0,
+                high=1.0,
+                shape=(self.observation_size,),
+                dtype=np.float32,
+            )
+            for agent in self.possible_agents
+        }
+        # PettingZoo pobiera obserwację przez `last()`, a następnie `step()`
+        # ponownie sprawdza maskę tej samej decyzji. Cache zapobiega dwukrotnemu
+        # liczeniu układu, drawów, historii i statystyk bez zmiany zwracanych
+        # danych. Jest czyszczony po każdej zmianie stanu gry.
+        self._observation_cache = {}
+        # RLCard jest relatywnie drogi w konstrukcji. Przechowujemy jedną
+        # instancję dla aktualnej liczby graczy i resetujemy ją między rękami.
+        # Nowa instancja jest potrzebna dopiero po czyimś odpadnięciu.
+        self.rlcard_env = None
+        self._rlcard_player_count = None
 
     def observation_space(self, agent):
         return self.observation_spaces[agent]
@@ -48,6 +76,12 @@ class TexasHoldemTournament(AECEnv):
         return self.action_spaces[agent]
 
     def reset(self, seed=None, options=None):
+        # Seed jest opcjonalny: trening pozostaje losowy, natomiast ewaluacja
+        # może odtwarzać te same rozdania dla kolejnych checkpointów.
+        self._tournament_seed = seed
+        self._hand_number = 0
+        self._tournament_number += 1
+        self.tournament_id = f"{self._environment_id}:{self._tournament_number}"
         self.agents = self.possible_agents[:]
         # Turniejowe żetony przechowujemy pod nazwami agentów, co ułatwi odczyt po bankructwach
         self.tournament_chips = {agent: self.starting_chips for agent in self.possible_agents}
@@ -55,16 +89,24 @@ class TexasHoldemTournament(AECEnv):
         # je przy resecie turnieju, a nie przy każdym nowym rozdaniu.
         self.opponent_stats = OpponentStatsTracker(self.possible_agents)
         self.dealer_idx = 0
+        self.completed_hands = 0
+        self.hand_wins = {agent: 0 for agent in self.possible_agents}
+        self.finishing_positions = {}
+        self._observation_cache.clear()
         
         self.terminations = {agent: False for agent in self.agents}
         self.truncations = {agent: False for agent in self.agents}
         self.rewards = {agent: 0.0 for agent in self.agents}
         self._cumulative_rewards = {agent: 0.0 for agent in self.agents}
-        self.infos = {agent: {} for agent in self.agents}
+        self.infos = {
+            agent: {"tournament_id": self.tournament_id}
+            for agent in self.agents
+        }
         
         self._start_new_hand()
 
     def _start_new_hand(self):
+        self._observation_cache.clear()
         # Aktywni agenci to tacy, którzy są w środowisku i nie mają flagi terminations
         self.active_agents = [a for a in self.agents if not self.terminations.get(a, False)]
         num_active = len(self.active_agents)
@@ -75,14 +117,8 @@ class TexasHoldemTournament(AECEnv):
         # Upewniamy się, że wskaźnik krupiera mieści się w puli pozostałych przy stole graczy
         self.dealer_idx = self.dealer_idx % num_active
         
-        self.rlcard_env = rlcard.make(
-            'no-limit-holdem', 
-            config={
-                'game_num_players': num_active, 
-                'chips_for_each': self.starting_chips, 
-                'dealer_id': self.dealer_idx,
-            }
-        )
+        self._prepare_rlcard_env(num_active)
+        self._hand_number += 1
         _, rlcard_player_id = self.rlcard_env.reset()
 
         if self.debug:
@@ -120,6 +156,46 @@ class TexasHoldemTournament(AECEnv):
         # Wskazujemy pierwszego gracza w nowym rozdaniu używając nazwy zmapowanej z RLCard
         self.agent_selection = self.active_agents[rlcard_player_id]
 
+    def _prepare_rlcard_env(self, num_active: int) -> None:
+        """Przygotuj silnik rozdania bez konstruowania go przy każdej ręce.
+
+        `game.configure()` bezpiecznie zmienia button przed `reset()`, ponieważ
+        ten reset odtwarza graczy, talię i rundę licytacji. Liczba graczy jest
+        częścią kształtu środowiska RLCard, więc po eliminacji tworzymy nową
+        instancję. Dla jawnego seedu nowa pula graczy dostaje seed zależny od
+        numeru ręki, dzięki czemu cały turniej pozostaje odtwarzalny.
+        """
+        needs_new_environment = (
+            self.rlcard_env is None
+            or self._rlcard_player_count != num_active
+        )
+        game_config = {
+            "game_num_players": num_active,
+            "chips_for_each": self.starting_chips,
+            "dealer_id": self.dealer_idx,
+        }
+
+        if needs_new_environment:
+            seed = (
+                self._tournament_seed + self._hand_number
+                if self._tournament_seed is not None
+                else None
+            )
+            self.rlcard_env = rlcard.make(
+                "no-limit-holdem",
+                config={**game_config, "seed": seed},
+            )
+            self._rlcard_player_count = num_active
+            return
+
+        self.rlcard_env.game.configure(game_config)
+        if self._tournament_seed is not None:
+            # Ewaluacja historycznie używała `seed + numer ręki`. Zachowujemy
+            # dokładnie tę sekwencję, aby stare i nowe checkpointy dostawały
+            # te same rozdania. Trening bez jawnego seedu pomija ten koszt i
+            # korzysta z ciągłego generatora istniejącej instancji.
+            self.rlcard_env.seed(self._tournament_seed + self._hand_number)
+
     def _street_contributions(self):
         """Zwróć faktyczne, a nie żądane przez RLCard, wpłaty na ulicy."""
         current_street = self.rlcard_env.game.stage.value
@@ -137,12 +213,18 @@ class TexasHoldemTournament(AECEnv):
         ]
 
     def observe(self, agent):
+        cached = self._observation_cache.get(agent)
+        if cached is not None:
+            return cached
+
         # Jeśli agent zbankrutował (został wykluczony ze start_new_hand), zwracamy pustą maskę
         if self.terminations.get(agent, False) or agent not in self.active_agents:
-            return {
+            result = {
                 "observation": np.zeros(self.observation_size, dtype=np.float32),
                 "action_mask": np.zeros(config.ACTION_SPACE, dtype=np.int8)
             }
+            self._observation_cache[agent] = result
+            return result
 
         # RLCard numeruje wyłącznie graczy obecnych w aktualnym rozdaniu.
         # Zamieniamy ten indeks z powrotem na stałe nazwy player_0...player_3.
@@ -200,10 +282,12 @@ class TexasHoldemTournament(AECEnv):
             opponent_stats=self.opponent_stats,
         )
             
-        return {
+        result = {
             "observation": observation,
             "action_mask": action_mask
         }
+        self._observation_cache[agent] = result
+        return result
 
     def _get_showdown_result(self):
         """Zwróć uczestników i zwycięzców publicznie widocznego showdownu."""
@@ -242,16 +326,21 @@ class TexasHoldemTournament(AECEnv):
         if self.terminations.get(self.agent_selection, False) or self.truncations.get(self.agent_selection, False):
             if self.debug:
                 print(f'{self.agent_selection} is dead and will be removed')
+            self._observation_cache.clear()
             self._was_dead_step(action)
             return
 
         # --- ZABEZPIECZENIE PRZED BUGIEM RLCARD ---
         current_obs = self.observe(self.agent_selection)
-        if current_obs["action_mask"][action] == 0:
+        if not 0 <= action < config.ACTION_SPACE or current_obs["action_mask"][action] == 0:
             # Jeśli kolektor losowy wybierze złą akcję, wymuszamy FOLD (0) 
             # (lub 1 dla CHECK_CALL)
-            action = 0 
+            action = 0
         # ------------------------------------------
+
+        # Od tego miejsca akcja zmienia publiczny stan. Żadna obserwacja
+        # obliczona przed ruchem nie może zostać użyta przy następnej decyzji.
+        self._observation_cache.clear()
 
         self._clear_rewards()
         if self.debug:
@@ -313,6 +402,10 @@ class TexasHoldemTournament(AECEnv):
             )
 
             payoffs = self.rlcard_env.get_payoffs()
+            self.completed_hands += 1
+            for index, payoff in enumerate(payoffs):
+                if payoff > 0:
+                    self.hand_wins[self.active_agents[index]] += 1
             if self.debug:
                 print(f"Wynik rozdania (dla aktywnych): {payoffs}")
 
@@ -323,15 +416,27 @@ class TexasHoldemTournament(AECEnv):
                 self.rewards[agent_name] = float(payoff) / self.starting_chips # znormalizowana nagroda
                 
             # Weryfikacja bankructw po rozliczeniu żetonów
+            active_before = len(self.active_agents)
             active_count = 0
+            newly_eliminated = []
             for agent in self.active_agents:
                 if self.tournament_chips[agent] <= 0:
                     self.terminations[agent] = True
+                    newly_eliminated.append(agent)
                 else:
                     active_count += 1
+
+            if newly_eliminated:
+                # Gracze odpadający w tym samym rozdaniu zajmują ex aequo
+                # średnią z przypadających im miejsc.
+                tied_position = (active_count + 1 + active_before) / 2
+                for agent in newly_eliminated:
+                    self.finishing_positions[agent] = tied_position
                     
             if active_count <= 1:
                 # Ostatni na polu bitwy, turniej zakończony
+                winner = max(self.tournament_chips, key=self.tournament_chips.get)
+                self.finishing_positions[winner] = 1.0
                 for agent in self.agents:
                     self.terminations[agent] = True
                     # self.rewards[agent] = float(self.tournament_chips[agent] - self.starting_chips) # nagroda na koniec turnieju - może warto dodać większą za wygranie?

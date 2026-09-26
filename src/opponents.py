@@ -9,6 +9,7 @@ from tianshou.algorithm.algorithm_base import Policy
 from tianshou.data import Batch
 import torch
 import gymnasium as gym
+import config
 from typing import cast
 from tianshou.algorithm.algorithm_base import OffPolicyAlgorithm, TrainingStats
 from tianshou.algorithm.algorithm_base import Policy as BasePolicy
@@ -157,7 +158,10 @@ class SeededMixedPolicy(BasePolicy):
         super().__init__(action_space=action_space)
         # Generator dla powtarzalności zachowań
         self.rng = np.random.default_rng(seed)
-        self.base_weights = np.array([0.20, 0.45, 0.18, 0.12, 0.05], dtype=np.float32)
+        self.base_weights = np.asarray(
+            config.MIXED_ACTION_WEIGHTS,
+            dtype=np.float32,
+        )
 
     def forward(
         self,

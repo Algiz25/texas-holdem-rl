@@ -10,7 +10,7 @@ import config
 from training.base_trainer import BasePokerTrainer
 from evaluation.evaluator_ppo import PPOEvaluator
 from models import MaskedActor, Critic, CPUActionActorPolicy
-from phases import DynamicOpponentAlgorithm, ShuffleOpponentsHook
+from phases import DynamicOpponentAlgorithm
 from opponents import RandomOnPolicyAgent, FrozenPPO, PassiveAlgorithm, AggressiveAlgorithm, SeededMixedAlgorithm
 from paths import PPO_CHECKPOINT_DIR
 
@@ -85,10 +85,17 @@ class PPOPokerTrainer(BasePokerTrainer):
             eps_clip=0.2
         )
 
-        try:
-            frozen_opponent.policy.load_state_dict(torch.load(PPO_CHECKPOINT_DIR / 'best.pth', map_location=self.device, weights_only=True))
-        except FileNotFoundError:
-            pass
+        if self.phase_name in {"self", "advanced"}:
+            try:
+                frozen_opponent.policy.load_state_dict(
+                    torch.load(
+                        PPO_CHECKPOINT_DIR / "best.pth",
+                        map_location=self.device,
+                        weights_only=True,
+                    )
+                )
+            except FileNotFoundError:
+                pass
 
         # Inne agenty
         random_agent = RandomOnPolicyAgent(action_space=self.env.action_space)
@@ -105,16 +112,13 @@ class PPOPokerTrainer(BasePokerTrainer):
                 "mixed": mixed_agent.policy
             }
 
-            # 50% random, 40% passive, 10% mixed
-            opponent_weights = {
-                "random": 0.50,
-                "passive": 0.40,
-                "mixed": 0.10
-            }
+            # Wspólna konfiguracja nie pozwala treningowi PPO i ewaluatorowi
+            # nieświadomie używać różnych proporcji przeciwników fazy 1.
+            opponent_weights = config.PHASE1_OPPONENT_WEIGHTS
 
-            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
-            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
-            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights)
+            opponent_1 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=20_001)
+            opponent_2 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=20_002)
+            opponent_3 = DynamicOpponentAlgorithm(self.env.action_space, available_opponents, opponent_weights, seed=20_003)
 
             agents = [ppo_learner, opponent_1, opponent_2, opponent_3]
         # TODO: trzeba zdefiniować inne fazy
@@ -123,28 +127,31 @@ class PPOPokerTrainer(BasePokerTrainer):
 
         marl_algo = MultiAgentOnPolicyAlgorithm(algorithms=agents, env=self.env)
 
-        shuffle_hook = ShuffleOpponentsHook(opponent_1, opponent_2, opponent_3)
-
         # Kolektory
         buffer = VectorReplayBuffer(config.PPO_BUFFER_SIZE, len(self.train_envs))
         train_collector = Collector(
             marl_algo, 
             self.train_envs, 
             buffer, 
-            exploration_noise=True, 
-            on_episode_done_hook=shuffle_hook
+            exploration_noise=True,
         )
 
         test_collector = Collector(
             marl_algo, 
             self.test_envs, 
-            exploration_noise=False, 
-            on_episode_done_hook=shuffle_hook
+            exploration_noise=False,
         )
 
         # Funkcje trenujące z logiką PPO
+        latest_step = {"value": 0}
+
         def train_fn(epoch, env_step):
-            self.run_periodic_opponent_update(epoch, ppo_learner.policy, policy_opponent)
+            latest_step["value"] = env_step
+            self.run_periodic_evaluation(
+                env_step=env_step,
+                learner_policy=ppo_learner.policy,
+                opponent_policy=policy_opponent,
+            )
 
         def test_fn(epoch, env_step):
             pass
@@ -158,17 +165,20 @@ class PPOPokerTrainer(BasePokerTrainer):
             batch_size=config.PPO_BATCH_SIZE,
             training_collector=train_collector,
             test_collector=test_collector,
-            test_step_num_episodes=config.OPPONENT_UPDATE_INTERVAL,
+            test_step_num_episodes=config.EVAL_SMOKE_TOURNAMENTS,
             training_fn=train_fn,
             test_fn=test_fn,
-            save_best_fn=self.save_best_model,
             multi_agent_return_reduction=lambda ret: ret[:, 0]
         )
 
+        self.run_initial_evaluation(learner_policy=ppo_learner.policy)
         print("Rozpoczęcie treningu PPO...")
         result = OnPolicyTrainer(algorithm=marl_algo, params=trainer_params).run()
         print(f"\n=== Trening PPO Zakończony ===\nNajlepsza nagroda: {result.best_reward}")
-        torch.save(ppo_learner.policy.state_dict(), PPO_CHECKPOINT_DIR / 'final.pth')
+        self.run_final_evaluation(
+            learner_policy=ppo_learner.policy,
+            env_step=latest_step["value"] or self.total_steps,
+        )
 
 if __name__ == "__main__":
     trainer = PPOPokerTrainer(

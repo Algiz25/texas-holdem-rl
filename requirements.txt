@@ -3,4 +3,5 @@ numpy
 pettingzoo
 rlcard
 tianshou
+tensorboard
 torch

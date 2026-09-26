@@ -28,3 +28,7 @@ AGENTS.md
 *.ckpt
 logs/
 old/
+checkpoints/**/evaluations/
+checkpoints/*/*.log
+checkpoints/*/*.pid
+checkpoints/*/*.lock

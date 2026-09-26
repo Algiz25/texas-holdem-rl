@@ -8,6 +8,8 @@ from tianshou.algorithm.modelfree.ppo import PPO
 import config
 
 class PPOEvaluator(BasePokerEvaluator):
+    algorithm_name = "ppo"
+
     def load_policy(self):
         actor = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(self.device)
         critic = Critic(state_shape=config.OBSERVATION_SIZE).to(self.device)
@@ -21,7 +23,10 @@ class PPOEvaluator(BasePokerEvaluator):
             dist_fn=dist_fn,
             action_space=self.env.action_space("player_0"),
             observation_space=self.env.observation_space("player_0"),
-            action_scaling=False
+            action_scaling=False,
+            # Podczas ewaluacji wybieramy najlepszą akcję, a nie próbkę z
+            # rozkładu PPO. Inaczej wynik mierzyłby również losowość polityki.
+            deterministic_eval=True,
         )
         
         ppo_algo = PPO(
@@ -45,7 +50,16 @@ class PPOEvaluator(BasePokerEvaluator):
         except FileNotFoundError:
             print(f"BŁĄD: Nie znaleziono pliku {self.model_path}.")
             return None
+        except RuntimeError as error:
+            print(
+                f"BŁĄD: Checkpoint {self.model_path} nie pasuje do aktualnej "
+                f"architektury ({config.OBSERVATION_SIZE} obserwacje): {error}"
+            )
+            return None
 
 if __name__ == "__main__":
-    ppo_eval = PPOEvaluator(num_tournaments=100, model_path=PPO_CHECKPOINT_DIR / 'best.pth', training_phase="RANDOM")
+    ppo_eval = PPOEvaluator(
+        num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+        model_path=PPO_CHECKPOINT_DIR / "best.pth",
+    )
     ppo_eval.evaluate()
