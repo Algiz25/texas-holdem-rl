@@ -32,7 +32,7 @@ EVAL_SMOKE_TOURNAMENTS = 1
 # Domyślny interwał zachowujemy dla wieloagentowego PPO. DQN nadpisuje go
 # interwałem liczonym w swoich decyzjach, zdefiniowanym niżej.
 EVAL_INTERVAL_STEPS = 100_000
-EVAL_TOURNAMENTS_PER_SUITE = 50
+EVAL_TOURNAMENTS_PER_SUITE = 1000
 
 # Test końcowy korzysta z większej próby i innego zakresu seedów niż
 # walidacja. 200 turniejów na zestaw ogranicza wariancję, ale nie wydłuża

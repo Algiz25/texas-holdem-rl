@@ -1,4 +1,4 @@
-# Skrypt nocny PPO dla Windows. 
+﻿# Skrypt nocny PPO dla Windows. 
 # UWAGA: Aby komputer nie zasnął, zmień ustawienia zasilania Windows 
 # (Ustawienia -> System -> Zasilanie i uśpienie -> Uśpienie: Nigdy).
 
@@ -60,7 +60,7 @@ if (Test-Path $LatestState) {
         Write-Host "[GOTOWE] $RunName jest już przy technicznym limicie." -ForegroundColor Green
         exit 0
     }
-    Write-Host "[WZNOWIENIE] $RunName: $Completed/$TotalDecisions decyzji." -ForegroundColor Yellow
+    Write-Host "[WZNOWIENIE] ${RunName}: $Completed/$TotalDecisions decyzji." -ForegroundColor Yellow
 }
 
 Write-Host "[START] Jeden długi trening PPO: $RunName." -ForegroundColor Cyan
