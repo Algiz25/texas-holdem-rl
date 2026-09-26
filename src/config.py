@@ -72,7 +72,12 @@ DQN_OTHER_PHASE_EPS_DECAY = 0.5
 # bufor
 DQN_BUFFER_SIZE = 500_000
 DQN_BUFFER_WARMUP = 25_000
-DQN_BATCH_SIZE = 64
+
+# Dla macbooka
+# DQN_BATCH_SIZE = 64
+
+# Dla Borian komputer
+DQN_BATCH_SIZE = 256
 
 # Jedna aktualizacja gradientu przypada na cztery nowe decyzje ucznia.
 # Zmniejsza to wielokrotne trenowanie na tych samych rekordach i pozwala
@@ -81,7 +86,10 @@ DQN_UPDATE_RATIO = 0.25
 
 # MacBook Air M2 ma cztery rdzenie wydajnościowe i cztery energooszczędne.
 # Osiem procesów środowiska dało najwyższą łączną przepustowość w benchmarku.
-DQN_NUM_TRAIN_ENVS = 8
+# DQN_NUM_TRAIN_ENVS = 8
+
+# Dla Borian komputer
+DQN_NUM_TRAIN_ENVS = 4
 # Test techniczny rozgrywa tylko jeden turniej, więc jeden proces testowy jest
 # wystarczający. Pozostałe siedem procesów przez większość treningu było
 # bezczynnych i jedynie zajmowało pamięć oraz zasoby systemowe.
@@ -110,20 +118,35 @@ DQN_EVAL_INTERVAL_DECISIONS = 25_000
 # bezpiecznym początkiem kolejnej fazy albo wznowienia eksperymentu.
 DQN_FULL_STATE_INTERVAL_DECISIONS = 100_000
 
+#TODO: WAŻNE jeśli trenowałbtś na macbooku to musisz tu pozmieniać rzeczy
+
 # ZMIENNE TRENINGOWE PPO
-PPO_LEARNING_RATE = 3e-4 # TODO: sprawdzić czy to dobra ilość
+PPO_LEARNING_RATE = 3e-4
 PPO_GAMMA = 0.99
+PPO_GAE_LAMBDA = 0.95
+PPO_VF_COEF = 0.5
+PPO_ENT_COEF = 0.02
+PPO_EPS_CLIP = 0.2
+
 
 # bufor
-PPO_BUFFER_SIZE = 2048 # TODO: sprawdzić czy to dobry rozmiar (powinno być PPO_STEPS_PER_EPOCH/2)
-PPO_BATCH_SIZE = 256
+PPO_BUFFER_SIZE = 16384
+PPO_BATCH_SIZE = 2048
 
-# środowiska
-PPO_NUM_TRAIN_ENVS = 2
+# Dla macbooka
+PPO_NUM_TRAIN_ENVS = 8
+
+# Dla Borian komputer
+PPO_NUM_TRAIN_ENVS = 4
 PPO_NUM_TEST_ENVS = 1
-PPO_MAX_EPOCHS = 100
-PPO_STEPS_PER_EPOCH = 4096 # TODO: sprawdzić czy nie za mało
 
+# 61 epok po 4096 kroków daje ~250 000 decyzji ucznia (podobnie jak w DQN)
+PPO_MAX_EPOCHS = 305
+PPO_STEPS_PER_EPOCH = 16384
+PPO_REPEAT_PER_COLLECT = 4
+
+PPO_EVAL_INTERVAL_DECISIONS = 25_000
+PPO_FULL_STATE_INTERVAL_DECISIONS = 100_000
 # EWALUACJA
 
 # Jeden „mecz” ewaluacyjny trwa najwyżej 100 rozdań. To ważne zwłaszcza dla

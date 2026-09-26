@@ -1,4 +1,4 @@
-"""Jednoagentowy widok turnieju używany wyłącznie do treningu DQN.
+"""Jednoagentowy widok turnieju używany wyłącznie do treningu DQN i PPO.
 
 Podstawowe środowisko jest środowiskiem AEC: jeden krok oznacza jeden ruch
 przy stole, niezależnie od tego, który gracz go wykonuje. To jest właściwy
@@ -33,7 +33,7 @@ MIXED_ACTION_WEIGHTS = np.asarray(
 )
 
 
-class DQNLearnerEnv(gym.Env):
+class PokerLearnerEnv(gym.Env):
     """Pokaż kolektorowi wyłącznie kolejne decyzje jednego ucznia.
 
     Przeciwnicy są częścią środowiska, a nie osobnymi algorytmami uczonymi
@@ -264,6 +264,6 @@ class DQNLearnerEnv(gym.Env):
         self.poker_env.close()
 
 
-def make_dqn_training_env(initial_seed: int | None = None) -> DQNLearnerEnv:
+def make_learner_env(initial_seed: int | None = None) -> PokerLearnerEnv:
     """Fabryka na poziomie modułu, którą można bezpiecznie wysłać do procesu."""
-    return DQNLearnerEnv(initial_seed=initial_seed)
+    return PokerLearnerEnv(initial_seed=initial_seed)
