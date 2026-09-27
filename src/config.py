@@ -3,7 +3,7 @@ from observation.schema import OBSERVATION_SIZE
 
 # ZMIENNE ŚRODOWISKOWE
 # póki co jedyna dostępna faza to 1
-TRAINING_PHASE = 1
+TRAINING_PHASE = 2
 ACTION_SPACE = 5    # nie zmieniać
 STARTING_CHIPS = 200
 NUM_PLAYERS = 4     # nie zmieniać
@@ -16,6 +16,14 @@ PHASE1_OPPONENT_WEIGHTS = {
     "passive": 0.40,
     "mixed": 0.10,
 }
+
+PHASE2_OPPONENT_WEIGHTS = {
+    "historical_self": 0.40,
+    "latest_self": 0.30,
+    "mixed": 0.20,
+    "passive": 0.10,
+}
+PHASE2_MAX_HISTORICAL_MODELS = 100
 
 # Rozkład akcji osobowości Mixed jest wspólny dla treningu i ewaluacji.
 # Jedno źródło zapobiega sytuacji, w której bot o tej samej nazwie zachowuje
@@ -121,11 +129,17 @@ DQN_FULL_STATE_INTERVAL_DECISIONS = 100_000
 #TODO: WAŻNE jeśli trenowałbtś na macbooku to musisz tu pozmieniać rzeczy
 
 # ZMIENNE TRENINGOWE PPO
-PPO_LEARNING_RATE = 3e-4
+if TRAINING_PHASE == 1:
+    PPO_LEARNING_RATE = 3e-4
+    PPO_ENT_COEF = 0.02
+else:
+    # W Fazie 2 (Self-Play) zmniejszamy LR i entropię dla większej stabilności
+    PPO_LEARNING_RATE = 1e-4
+    PPO_ENT_COEF = 0.01
+
 PPO_GAMMA = 0.99
 PPO_GAE_LAMBDA = 0.95
 PPO_VF_COEF = 0.5
-PPO_ENT_COEF = 0.02
 PPO_EPS_CLIP = 0.2
 
 
@@ -141,7 +155,12 @@ PPO_NUM_TRAIN_ENVS = 4
 PPO_NUM_TEST_ENVS = 1
 
 # 61 epok po 4096 kroków daje ~250 000 decyzji ucznia (podobnie jak w DQN)
-PPO_MAX_EPOCHS = 611
+
+if TRAINING_PHASE == 1:
+    PPO_MAX_EPOCHS = 611
+else:
+    PPO_MAX_EPOCHS = 1221
+
 PPO_STEPS_PER_EPOCH = 16384
 PPO_REPEAT_PER_COLLECT = 4
 

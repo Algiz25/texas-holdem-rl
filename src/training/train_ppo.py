@@ -99,6 +99,23 @@ def ensure_finite_model(model: torch.nn.Module, env_step: int) -> None:
             f"niepoprawne parametry: {names}"
         )
 
+def extract_actor_weights(policy_state_dict: dict) -> dict:
+    """Wyciąga same wagi Actora z polityki PPO i przenosi je na CPU dla workerów.
+    
+        Polityka PPO zawiera wagi sieci Actora 
+        i Critica. Przeciwnicy w środowisku
+        potrzebują tylko Actora.
+        Wagi w polityce PPO mają prefiks 'actor.' 
+        (np. 'actor.decision_head.0.weight').
+        Funkcja usuwa 'actor.', aby 
+        `load_state_dict` zadziałało poprawnie.
+    """
+    return {
+        k.replace("actor.", ""): v.cpu() 
+        for k, v in policy_state_dict.items() 
+        if k.startswith("actor.")
+    }
+
 class PPOPokerTrainer(BasePokerTrainer):
     def __init__(
         self,
@@ -106,6 +123,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         resume_path: Path | None = None,
         start_step: int | None = None,
         run_name: str = "ppo",
+        base_model_path: Path | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -113,6 +131,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         self.requested_start_step = start_step
         self.starting_step = 0
         self.run_name = run_name
+        self.base_model_path = base_model_path
 
     def setup_and_train(self):
         # Konfiguracja Ucznia
@@ -130,6 +149,28 @@ class PPOPokerTrainer(BasePokerTrainer):
             action_scaling=False
         )
 
+        # --- Ładowanie modelu bazowego dla Fazy 2 ---
+        if self.training_phase == 2:
+            if not self.base_model_path and not self.resume_path:
+                raise ValueError("Faza 2 wymaga podania --base-model (np. step_008110080.pth z Fazy 1).")
+            
+            if self.base_model_path:
+                print(f"Ładowanie modelu bazowego z {self.base_model_path}...")
+                base_state = torch.load(self.base_model_path, map_location=self.device, weights_only=True)
+                # Jeśli to plik z ewaluacji (tylko wagi), ładujemy bezpośrednio
+                if "algorithm_state" not in base_state:
+                    policy_learner.load_state_dict(base_state)
+                else:
+                    policy_learner.load_state_dict(base_state["algorithm_state"])
+
+                # Rozsyłamy wagi do środowisk (Latest Self i pierwszy Historical Self)
+                actor_weights = extract_actor_weights(policy_learner.state_dict())
+                self.train_envs.set_env_attr("latest_model_weights", actor_weights)
+                self.train_envs.set_env_attr("new_historical_model_weights", actor_weights)
+                self.test_envs.set_env_attr("latest_model_weights", actor_weights)
+                self.test_envs.set_env_attr("new_historical_model_weights", actor_weights)
+                print("Rozesłano model bazowy do przeciwników w środowiskach.")
+
         resume_payload = None
         if self.resume_path is not None:
             resume_payload = torch.load(
@@ -143,13 +184,6 @@ class PPOPokerTrainer(BasePokerTrainer):
                         "Przy wznowieniu ze starego pliku wag podaj --start-step."
                     )
                 policy_learner.load_state_dict(resume_payload)
-
-        if self.training_phase in ["SELF", "ADVANCED"]:
-            try:
-                policy_learner.load_state_dict(torch.load(self.checkpoint_dir / 'final.pth', map_location=self.device, weights_only=True))
-                print("Wczytano wagi ucznia z poprzedniej fazy!")
-            except FileNotFoundError:
-                print("Brak końcowego modelu PPO dla ucznia, start od zera.")
 
         ppo_learner = PPO(
             policy=policy_learner,
@@ -174,11 +208,16 @@ class PPOPokerTrainer(BasePokerTrainer):
                     raise ValueError("Checkpoint ma niezgodny rozmiar obserwacji.")
                 if resume_payload["action_space"] != config.ACTION_SPACE:
                     raise ValueError("Checkpoint ma niezgodny rozmiar akcji.")
+                
                 ppo_learner.load_state_dict(resume_payload["algorithm_state"])
                 self.starting_step = int(resume_payload["completed_env_steps"])
-                self.best_validation_score = float(
-                    resume_payload.get("best_validation_score", float("-inf"))
-                )
+                self.best_validation_score = float(resume_payload.get("best_validation_score", float("-inf")))
+                
+                # Jeśli wznawiamy Fazę 2, musimy też rozesłać wagi wznowionego modelu do środowisk
+                if self.training_phase == 2:
+                    actor_weights = extract_actor_weights(ppo_learner.policy.state_dict())
+                    self.train_envs.set_env_attr("latest_model_weights", actor_weights)
+                    self.test_envs.set_env_attr("latest_model_weights", actor_weights)
             else:
                 self.starting_step = int(self.requested_start_step)
 
@@ -191,7 +230,7 @@ class PPOPokerTrainer(BasePokerTrainer):
                 f"'{self.resume_path}'."
             )
 
-        if self.training_phase != 1:
+        if self.training_phase not in [1, 2]:
             raise NotImplementedError(f"Nieobsługiwana faza PPO: {self.training_phase}")
 
         # Kolektory
@@ -230,6 +269,21 @@ class PPOPokerTrainer(BasePokerTrainer):
             ensure_finite_model(critic_learner, global_step)
 
             evaluation_due = global_step >= self.next_evaluation_step
+
+            # --- Aktualizacja przeciwników w Fazie 2 ---
+            if self.training_phase == 2:
+                # Co ewaluację aktualizujemy "Latest Self"
+                if evaluation_due:
+                    actor_weights = extract_actor_weights(ppo_learner.policy.state_dict())
+                    self.train_envs.set_env_attr("latest_model_weights", actor_weights)
+                    self.test_envs.set_env_attr("latest_model_weights", actor_weights)
+                
+                # Co pełny zapis stanu dodajemy model do "Historical Self"
+                if global_step > 0 and global_step % config.PPO_FULL_STATE_INTERVAL_DECISIONS == 0:
+                    actor_weights = extract_actor_weights(ppo_learner.policy.state_dict())
+                    self.train_envs.set_env_attr("new_historical_model_weights", actor_weights)
+                    self.test_envs.set_env_attr("new_historical_model_weights", actor_weights)
+
             if evaluation_due:
                 save_training_state(
                     ppo_learner,
@@ -381,6 +435,13 @@ def parse_args() -> argparse.Namespace:
         default=config.PPO_EVAL_INTERVAL_DECISIONS,
         help="Odstęp pomiędzy pełnymi walidacjami, liczony w decyzjach PPO.",
     )
+    parser.add_argument(
+        "--base-model",
+        type=Path,
+        help="Ścieżka do najlepszego modelu z Fazy 1 (wymagane w Fazie 2)."
+    )
+
+
     args = parser.parse_args()
     if args.actions <= 0 or args.actions % config.PPO_STEPS_PER_EPOCH != 0:
         parser.error(
@@ -402,8 +463,8 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    if config.TRAINING_PHASE != 1:
-        raise ValueError("Ten skrypt fazy rozgrzewkowej wymaga TRAINING_PHASE = 1")
+    if config.TRAINING_PHASE not in [1, 2]:
+        raise ValueError("Ten skrypt fazy rozgrzewkowej wymaga TRAINING_PHASE = 1 lub 2")
     
     configure_cpu_runtime()
     np.random.seed(args.seed)
@@ -420,7 +481,7 @@ if __name__ == "__main__":
     ]
     
     print(
-        "Konfiguracja fazy 1 PPO: "
+        f"Konfiguracja Fazy {config.TRAINING_PHASE} PPO: "
         f"run '{args.run_name}', seed {args.seed}, "
         f"{args.actions:,} decyzji PPO, "
         f"ewaluacja co {args.evaluation_interval:,}, "
@@ -445,5 +506,6 @@ if __name__ == "__main__":
             resume_path=args.resume,
             start_step=args.start_step,
             run_name=args.run_name,
+            base_model_path=args.base_model
         )
         trainer.setup_and_train()
