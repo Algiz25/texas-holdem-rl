@@ -4,6 +4,10 @@
 
 $ErrorActionPreference = "Stop"
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ProjectDir = Split-Path -Parent $ScriptDir
 Set-Location -Path $ProjectDir
@@ -11,9 +15,9 @@ Set-Location -Path $ProjectDir
 $Python = ".venv\Scripts\python.exe"
 $RunName = "overnight_ppo_seed_11001"
 $Seed = 11001
-# 5 milionów decyzji to około 305 epok (przy buforze 16384). 
+# 5 milionów decyzji to około 611 epok (przy buforze 16384). 
 # Idealne na kilkugodzinny trening.
-$TotalDecisions = 5000000 
+$TotalDecisions = 10010624
 $EvaluationInterval = 245760
 
 $NightId = Get-Date -Format "yyyyMMdd_HHmmss"

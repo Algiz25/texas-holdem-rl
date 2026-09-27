@@ -4,6 +4,10 @@
 
 $ErrorActionPreference = "Stop"
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ProjectDir = Split-Path -Parent $ScriptDir
 Set-Location -Path $ProjectDir
