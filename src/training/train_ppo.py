@@ -17,87 +17,21 @@ from tianshou.algorithm.optim import AdamOptimizerFactory
 from tianshou.utils import TensorboardLogger
 
 import config
-from training.base_trainer import BasePokerTrainer
 from training.learner_environment import make_learner_env
 from evaluation.evaluator_ppo import PPOEvaluator
 from models import MaskedActor, Critic
 from tianshou.algorithm.modelfree.reinforce import ProbabilisticActorPolicy
 from paths import PPO_CHECKPOINT_DIR, tensorboard_run_dir
 
+from training.base_trainer import (
+    BasePokerTrainer,
+    save_training_state,
+    single_training_process,
+    configure_cpu_runtime,
+    ensure_finite_model,
+)
+
 RUN_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
-
-def save_training_state(
-    ppo: PPO,
-    env_step: int,
-    path: Path,
-    *,
-    best_validation_score: float,
-) -> None:
-    """Zapisz stan PPO potrzebny do bezpiecznej kontynuacji treningu."""
-    payload = {
-        "format_version": 3,
-        "step_unit": "learner_decisions",
-        "algorithm_state": ppo.state_dict(),
-        "completed_env_steps": env_step,
-        "best_validation_score": best_validation_score,
-        "observation_size": config.OBSERVATION_SIZE,
-        "action_space": config.ACTION_SPACE,
-    }
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    torch.save(payload, temporary_path)
-    temporary_path.replace(path)
-
-@contextmanager
-def single_training_process():
-    """Nie pozwól przypadkowo uruchomić dwóch treningów w tym samym katalogu."""
-    PPO_CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    lock_path = PPO_CHECKPOINT_DIR / "training.lock"
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
-        try:
-            if os.name == "nt":
-                import msvcrt
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (BlockingIOError, OSError) as error:
-            raise RuntimeError(
-                "Inny trening PPO już działa. Nie uruchamiaj drugiego procesu."
-            ) from error
-        
-        lock_file.seek(0)
-        lock_file.truncate()
-        lock_file.write(f"pid={os.getpid()}\n")
-        lock_file.flush()
-        try:
-            yield
-        finally:
-            if os.name == "nt":
-                import msvcrt
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
-
-def configure_cpu_runtime() -> None:
-    torch.set_num_threads(config.TORCH_NUM_THREADS)
-    torch.set_num_interop_threads(config.TORCH_NUM_INTEROP_THREADS)
-
-def ensure_finite_model(model: torch.nn.Module, env_step: int) -> None:
-    """Przerwij trening od razu, gdy wagi zawierają NaN albo nieskończoność."""
-    invalid_parameters = [
-        name
-        for name, parameter in model.named_parameters()
-        if not torch.isfinite(parameter).all()
-    ]
-    if invalid_parameters:
-        names = ", ".join(invalid_parameters)
-        raise FloatingPointError(
-            f"Niestabilny PPO po {env_step:,} decyzjach ucznia; "
-            f"niepoprawne parametry: {names}"
-        )
 
 def extract_actor_weights(policy_state_dict: dict) -> dict:
     """Wyciąga same wagi Actora z polityki PPO i przenosi je na CPU dla workerów.
@@ -489,7 +423,7 @@ if __name__ == "__main__":
         f"{config.TORCH_NUM_THREADS} wątek PyTorch."
     )
     
-    with single_training_process():
+    with single_training_process(checkpoint_dir):
         trainer = PPOPokerTrainer(
             algo_name="ppo",
             training_phase=config.TRAINING_PHASE,

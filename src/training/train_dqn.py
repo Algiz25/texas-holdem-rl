@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from functools import partial
 from pathlib import Path
+import math
 
 import torch
 import numpy as np
@@ -16,145 +17,32 @@ from tianshou.algorithm.optim import AdamOptimizerFactory
 from tianshou.utils import TensorboardLogger
 
 import config
-from training.base_trainer import BasePokerTrainer
 from training.learner_environment import make_learner_env
 from evaluation.evaluator_dqn import DQNEvaluator
 from models import MaskedActor
 from paths import DQN_CHECKPOINT_DIR, dqn_run_dir, tensorboard_run_dir
 
+from training.base_trainer import (
+    BasePokerTrainer,
+    save_training_state,
+    single_training_process,
+    configure_cpu_runtime,
+    ensure_finite_model,
+)
+
 
 RUN_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
-def save_training_state(
-    dqn: DQN,
-    env_step: int,
-    path: Path,
-    *,
-    best_validation_score: float,
-    epsilon_decay_steps: int,
-) -> None:
-    """Zapisz stan DQN potrzebny do bezpiecznej kontynuacji treningu.
-
-    Stan algorytmu zawiera sieć ucznia, sieć docelową i optymalizator. Celowo
-    nie zapisujemy replay buffera: przy 500 tys. obserwacji zajmowałby setki
-    megabajtów. Po wznowieniu bufor jest ponownie rozgrzewany przez 25 tys.
-    decyzji ucznia, ale wagi i momentum optymalizatora pozostają zachowane.
-    """
-    payload = {
-        "format_version": 3,
-        # Od wersji 2 jeden krok oznacza decyzję ucznia, a nie dowolną akcję
-        # przy stole. Jawna jednostka zapobiega cichej kontynuacji starego,
-        # wieloagentowego treningu z nieporównywalnym licznikiem kroków.
-        "step_unit": "learner_decisions",
-        "algorithm_state": dqn.state_dict(),
-        "algorithm_iteration": dqn._iter,
-        "completed_env_steps": env_step,
-        "epsilon": phase_one_epsilon(env_step, epsilon_decay_steps),
-        "epsilon_decay_steps": epsilon_decay_steps,
-        # Wynik jest częścią stanu sterującego treningiem. Bez niego wznowiony
-        # run mógłby uznać pierwszy, nawet słabszy checkpoint za „najlepszy” i
-        # nadpisać rzeczywiście najlepszy model sprzed przerwania.
-        "best_validation_score": best_validation_score,
-        "observation_size": config.OBSERVATION_SIZE,
-        "action_space": config.ACTION_SPACE,
-    }
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    torch.save(payload, temporary_path)
-    temporary_path.replace(path)
-
-
-# Zmieniam tutaj fcntl
-@contextmanager
-def single_training_process():
-    """Nie pozwól przypadkowo uruchomić dwóch treningów w tym samym katalogu."""
-    DQN_CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    lock_path = DQN_CHECKPOINT_DIR / "training.lock"
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
-        try:
-            # Dla windowsa
-            if os.name == "nt":
-                import msvcrt
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-            # Dla Unix/Linux
-            else:
-                import fcntl
-                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (BlockingIOError, OSError) as error:
-            raise RuntimeError(
-                "Inny trening DQN już działa. Nie uruchamiaj drugiego procesu."
-            ) from error
-        
-        lock_file.seek(0)
-        lock_file.truncate()
-        lock_file.write(f"pid={os.getpid()}\n")
-        lock_file.flush()
-        try:
-            yield
-        finally:
-            if os.name == "nt":
-                import msvcrt
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
-
-def phase_one_epsilon(env_step: int, decay_steps: int | None = None) -> float:
-    """Liniowo zmniejsz eksplorację według liczby decyzji ucznia.
-
-    Po osiągnięciu minimum agent nadal losuje 10% decyzji. Zapobiega to zbyt
-    wczesnemu przywiązaniu do strategii poznanej głównie na pasywnych botach.
-    """
-    decay_steps = decay_steps or config.DQN_PHASE1_EPS_DECAY_STEPS
-    if decay_steps <= 0:
-        raise ValueError("Liczba kroków wygaszania epsilon musi być dodatnia")
-    progress = min(max(env_step, 0) / decay_steps, 1.0)
-    return max(
-        config.DQN_RAND_PHASE_EPS_MIN,
-        config.DQN_EPS_MAX
-        + progress * (config.DQN_RAND_PHASE_EPS_MIN - config.DQN_EPS_MAX),
-    )
-
-
-def configure_cpu_runtime() -> None:
-    """Zapobiega przeciążeniu procesora przy wielu środowiskach.
+def phase_one_epsilon(env_step: int, tau: int | None = None) -> float:
+    """Wykładniczo zmniejsz eksplorację według liczby decyzji ucznia."""
+    tau = tau or config.DQN_PHASE1_EPS_TAU
+    if tau <= 0:
+        raise ValueError("Stała czasowa tau musi być dodatnia")
     
-    Gdy używamy SubprocVectorEnv (np. 8 procesów), domyślne zachowanie PyTorch
-    (używanie wszystkich rdzeni przez każdy proces) prowadzi do drastycznego
-    spadku wydajności. Ograniczenie do 1 wątku na proces jest optymalne.
-    """
-    torch.set_num_threads(config.TORCH_NUM_THREADS)
-    torch.set_num_interop_threads(config.TORCH_NUM_INTEROP_THREADS)
-
-
-def ensure_finite_model(model: torch.nn.Module, env_step: int) -> None:
-    """Przerwij trening od razu, gdy wagi zawierają NaN albo nieskończoność."""
-    invalid_parameters = [
-        name
-        for name, parameter in model.named_parameters()
-        if not torch.isfinite(parameter).all()
-    ]
-    if invalid_parameters:
-        names = ", ".join(invalid_parameters)
-        raise FloatingPointError(
-            f"Niestabilny DQN po {env_step:,} decyzjach ucznia; "
-            f"niepoprawne parametry: {names}"
-        )
-
-
-def validate_phase_one_configuration() -> None:
-    """Wykryj literówki w konfiguracji przed kosztownym uruchomieniem."""
-    if config.TRAINING_PHASE != 1:
-        raise ValueError("Ten skrypt fazy rozgrzewkowej wymaga TRAINING_PHASE = 1")
-    if not np.isclose(sum(config.PHASE1_OPPONENT_WEIGHTS.values()), 1.0):
-        raise ValueError("Wagi przeciwników fazy 1 muszą sumować się do 1.0")
-    if config.DQN_PHASE1_EPS_DECAY_STEPS > (
-        config.DQN_MAX_EPOCHS * config.DQN_STEPS_PER_EPOCH
-    ):
-        raise ValueError("Epsilon nie zdąży osiągnąć minimum przed końcem fazy 1")
-
+    # Wzór: eps_min + (eps_max - eps_min) * exp(-t / tau)
+    decay = math.exp(-max(env_step, 0) / tau)
+    return config.DQN_PHASE1_EPS_MIN + (config.DQN_EPS_MAX - config.DQN_PHASE1_EPS_MIN) * decay
 
 class DQNPokerTrainer(BasePokerTrainer):
     def __init__(
@@ -163,7 +51,7 @@ class DQNPokerTrainer(BasePokerTrainer):
         resume_path: Path | None = None,
         start_step: int | None = None,
         run_name: str = "dqn",
-        epsilon_decay_steps: int = config.DQN_PHASE1_EPS_DECAY_STEPS,
+        epsilon_tau: int = config.DQN_PHASE1_EPS_TAU,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -171,7 +59,7 @@ class DQNPokerTrainer(BasePokerTrainer):
         self.requested_start_step = start_step
         self.starting_step = 0
         self.run_name = run_name
-        self.epsilon_decay_steps = epsilon_decay_steps
+        self.epsilon_tau = epsilon_tau
 
     def setup_and_train(self):
         # Konfiguracja Ucznia
@@ -215,9 +103,10 @@ class DQNPokerTrainer(BasePokerTrainer):
         dqn_learner = DQN(
             policy=policy_learner,
             optim=AdamOptimizerFactory(lr=config.DQN_LEARNING_RATE),
-            gamma=config.DQN_GAMMA, # TODO: zobaczyć czy lepiej nie ustawić 0.95
+            gamma=config.DQN_GAMMA,
             n_step_return_horizon=3,
-            target_update_freq=config.DQN_TARGET_NET_UPDATE
+            target_update_freq=config.DQN_TARGET_NET_UPDATE,
+            huber_loss_delta=config.DQN_HUBER_LOSS_DELTA,
         )
 
         if resume_payload is not None:
@@ -237,18 +126,9 @@ class DQNPokerTrainer(BasePokerTrainer):
                 self.best_validation_score = float(
                     resume_payload.get("best_validation_score", float("-inf"))
                 )
-                saved_decay_steps = int(
-                    resume_payload.get(
-                        "epsilon_decay_steps",
-                        config.DQN_PHASE1_EPS_DECAY_STEPS,
-                    )
-                )
-                if saved_decay_steps != self.epsilon_decay_steps:
-                    raise ValueError(
-                        "Checkpoint korzystał z innego harmonogramu epsilon: "
-                        f"{saved_decay_steps:,}, obecnie "
-                        f"{self.epsilon_decay_steps:,}."
-                    )
+                saved_tau = int(resume_payload.get("epsilon_tau", config.DQN_PHASE1_EPS_TAU))
+                if saved_tau != self.epsilon_tau:
+                    raise ValueError(f"Checkpoint korzystał z innego tau: {saved_tau:,}, obecnie {self.epsilon_tau:,}.")
             else:
                 self.starting_step = int(self.requested_start_step)
 
@@ -316,16 +196,12 @@ class DQNPokerTrainer(BasePokerTrainer):
             update_interval=1_000,
         )
 
-        # Funkcje trenujące z logiką DQN (Epsilon Decay)
-        # eps definiuje jak często podejmowane są losowe decyzje
-        # TODO: można tu coś pokombinować, ale raczej jest git
+        # Funkcje trenujące z logiką DQN
         def train_fn(epoch, env_step):
             global_step = self.starting_step + env_step
-            if self.phase_name in {"1", "random"}:
-                eps = phase_one_epsilon(global_step, self.epsilon_decay_steps)
-            else:
-                eps = max(config.DQN_OTHER_PHASE_EPS_MIN, config.DQN_OTHER_PHASE_EPS_MAX - env_step / (config.DQN_OTHER_PHASE_EPS_DECAY * self.total_steps))
+            eps = phase_one_epsilon(global_step, self.epsilon_tau)
             dqn_learner.policy.set_eps_training(eps)
+
             writer.add_scalar("training/epsilon", eps, global_step=global_step)
             writer.add_scalar(
                 "training/replay_buffer_size",
@@ -348,7 +224,8 @@ class DQNPokerTrainer(BasePokerTrainer):
                     global_step,
                     self.checkpoint_dir / "training_state_latest.pth",
                     best_validation_score=self.best_validation_score,
-                    epsilon_decay_steps=self.epsilon_decay_steps,
+                    epsilon_tau=self.epsilon_tau,
+                    epsilon=eps,
                 )
 
             self.run_periodic_evaluation(
@@ -365,7 +242,8 @@ class DQNPokerTrainer(BasePokerTrainer):
                     global_step,
                     self.checkpoint_dir / "training_state_latest.pth",
                     best_validation_score=self.best_validation_score,
-                    epsilon_decay_steps=self.epsilon_decay_steps,
+                    epsilon_tau=self.epsilon_tau,
+                    epsilon=eps,
                 )
 
             # Pełny, nienadpisywany stan co 10 epok pozwala wybrać konkretny
@@ -381,7 +259,8 @@ class DQNPokerTrainer(BasePokerTrainer):
                     self.checkpoint_dir
                     / f"training_state_step_{global_step:09d}.pth",
                     best_validation_score=self.best_validation_score,
-                    epsilon_decay_steps=self.epsilon_decay_steps,
+                    epsilon_tau=self.epsilon_tau,
+                    epsilon=eps,
                 )
 
         def test_fn(epoch, env_step):
@@ -427,9 +306,6 @@ class DQNPokerTrainer(BasePokerTrainer):
         try:
             result = runtime_trainer.run()
         except KeyboardInterrupt:
-            # Ctrl+C ma być bezpiecznym „przyciskiem Stop”. Nie uruchamiamy tu
-            # długiej ewaluacji końcowej: zapisujemy aktualne wagi i pełny stan,
-            # zamykamy logi, po czym użytkownik od razu odzyskuje komputer.
             interrupted_step = self.starting_step + runtime_trainer._env_step
             ensure_finite_model(net_learner, interrupted_step)
             interrupted_path = self.checkpoint_dir / "interrupted.pth"
@@ -438,12 +314,16 @@ class DQNPokerTrainer(BasePokerTrainer):
                 dqn_learner.policy.state_dict(),
                 self.checkpoint_dir / "latest.pth",
             )
+            
+            eps = phase_one_epsilon(interrupted_step, self.epsilon_tau)
+                
             save_training_state(
                 dqn_learner,
                 interrupted_step,
                 self.checkpoint_dir / "training_state_latest.pth",
                 best_validation_score=self.best_validation_score,
-                epsilon_decay_steps=self.epsilon_decay_steps,
+                epsilon_tau=self.epsilon_tau,
+                epsilon=eps,
             )
             writer.flush()
             writer.close()
@@ -467,12 +347,16 @@ class DQNPokerTrainer(BasePokerTrainer):
             learner_policy=dqn_learner.policy,
             env_step=final_step,
         )
+        
+        eps = phase_one_epsilon(final_step, self.epsilon_tau)
+            
         save_training_state(
             dqn_learner,
             final_step,
             self.checkpoint_dir / "training_state_final.pth",
             best_validation_score=self.best_validation_score,
-            epsilon_decay_steps=self.epsilon_decay_steps,
+            epsilon_tau=self.epsilon_tau,
+            epsilon=eps,
         )
         writer.flush()
         writer.close()
@@ -515,12 +399,12 @@ def parse_args() -> argparse.Namespace:
         help="Liczba nowych decyzji DQN (domyślnie 250 000).",
     )
     parser.add_argument(
-        "--epsilon-decay-decisions",
+        "--epsilon-tau", # <--- ZMIENIONE
         type=int,
-        default=config.DQN_PHASE1_EPS_DECAY_STEPS,
+        default=config.DQN_PHASE1_EPS_TAU,
         help=(
-            "Liczba decyzji, przez które epsilon maleje z 1.0 do 0.1 "
-            "(domyślnie 180 000)."
+            "Stała czasowa tau dla wykładniczego zaniku epsilona "
+            "(domyślnie 50 000)."
         ),
     )
     parser.add_argument(
@@ -537,8 +421,8 @@ def parse_args() -> argparse.Namespace:
         )
     if args.start_step is not None and args.resume is None:
         parser.error("--start-step ma sens tylko razem z --resume.")
-    if args.epsilon_decay_decisions <= 0:
-        parser.error("--epsilon-decay-decisions musi być dodatnie.")
+    if args.epsilon_tau <= 0:
+        parser.error("--epsilon-tau musi być dodatnie.")
     if args.evaluation_interval <= 0:
         parser.error("--evaluation-interval musi być dodatni.")
     if args.run_name is None:
@@ -552,7 +436,6 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    validate_phase_one_configuration()
     configure_cpu_runtime()
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -570,13 +453,13 @@ if __name__ == "__main__":
         f"run '{args.run_name}', seed {args.seed}, "
         f"{args.actions:,} decyzji DQN, "
         f"warm-up {config.DQN_BUFFER_WARMUP:,}, "
-        f"epsilon 1.0→0.1 przez {args.epsilon_decay_decisions:,} decyzji, "
+        f"epsilon tau {args.epsilon_tau:,}, "
         f"ewaluacja co {args.evaluation_interval:,}, "
         f"update ratio {config.DQN_UPDATE_RATIO}, "
         f"{config.DQN_NUM_TRAIN_ENVS} środowisk, "
         f"{config.TORCH_NUM_THREADS} wątek PyTorch."
     )
-    with single_training_process():
+    with single_training_process(checkpoint_dir):
         trainer = DQNPokerTrainer(
             algo_name="dqn",
             training_phase=config.TRAINING_PHASE,
@@ -593,6 +476,6 @@ if __name__ == "__main__":
             resume_path=args.resume,
             start_step=args.start_step,
             run_name=args.run_name,
-            epsilon_decay_steps=args.epsilon_decay_decisions,
+            epsilon_tau=args.epsilon_tau,
         )
         trainer.setup_and_train()

@@ -151,3 +151,61 @@ class Critic(nn.Module):
         
         # Zwracamy pojedynczą wartość (Value)
         return self.value_head(combined_features)
+
+class DiscreteActionCritic(nn.Module):
+    """Sieć Critica dla Discrete SAC: ocenia stan gry dla każdej możliwej akcji.
+    Zwraca tensor o kształcie [batch_size, action_shape].
+    """
+    def __init__(self, state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE):
+        super().__init__()
+        
+        self.cards_branch = nn.Sequential(
+            nn.Linear(104, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU()
+        )
+        
+        meta_size = state_shape - 104
+        self.meta_branch = nn.Sequential(
+            nn.Linear(meta_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU()
+        )
+        
+        # Głowa decyzyjna zwraca action_shape wartości (Q-values dla każdej akcji)
+        self.value_head = nn.Sequential(
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, action_shape)
+        )
+
+    def forward(self, obs, state=None, info={}):
+        # Ekstrakcja z obiektu Batch z Tianshou
+        if isinstance(obs, Batch):
+            if hasattr(obs, 'observation'):
+                observation = obs.observation
+            elif hasattr(obs, 'obs'):
+                observation = obs.obs
+            else:
+                observation = obs
+        elif isinstance(obs, dict):
+            observation = obs.get("observation", obs)
+        else:
+            observation = obs
+
+        device = next(self.parameters()).device
+        observation = torch.as_tensor(observation, dtype=torch.float32).to(device)
+        
+        cards_input = observation[..., :104]
+        meta_input = observation[..., 104:]
+        
+        cards_features = self.cards_branch(cards_input)
+        meta_features = self.meta_branch(meta_input)
+        
+        combined_features = torch.cat([cards_features, meta_features], dim=-1)
+        
+        return self.value_head(combined_features)
