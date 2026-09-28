@@ -8,10 +8,10 @@ import pandas as pd
 # =======================================================
 
 # Ścieżka do folderu, w którym znajdują się pliki .json:
-INPUT_DIR = r".\checkpoints\ppo\overnight_ppo_seed_11001\evaluations"
+INPUT_DIR = r".\checkpoints\ppo\phase2_selfplay_seed_11001\evaluations_post"
 
 # Ścieżka i nazwa docelowego pliku CSV:
-OUTPUT_FILE = r".\checkpoints\ppo\overnight_ppo_seed_11001\evaluations\evaluations_v3.csv"
+OUTPUT_FILE = r".\checkpoints\ppo\phase2_selfplay_seed_11001\evaluations_post\evaluations_v3.csv"
 
 # =======================================================
 

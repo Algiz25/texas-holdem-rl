@@ -42,7 +42,7 @@ HAND_CATEGORY_NAMES = (
 
 # Każdy zestaw odpowiada na inne pytanie. Osobne wyniki pokazują, czy model
 # naprawdę się rozwija, czy nauczył się wykorzystywać tylko jeden typ bota.
-EVALUATION_SUITES = ("random", "passive", "mixed", "phase1_mix")
+EVALUATION_SUITES = ("random", "passive", "mixed", "phase1_mix", "baseline")
 
 MIXED_ACTION_WEIGHTS = np.asarray(config.MIXED_ACTION_WEIGHTS)
 PHASE1_OPPONENTS = tuple(config.PHASE1_OPPONENT_WEIGHTS)
@@ -53,6 +53,7 @@ def _evaluate_suite_in_worker(
     evaluator_class,
     num_tournaments: int,
     model_path: Path,
+    baseline_model_path: Path | None,
     training_phase: int | str,
     report_dir: Path,
     suite: str,
@@ -71,14 +72,18 @@ def _evaluate_suite_in_worker(
     evaluator = evaluator_class(
         num_tournaments=num_tournaments,
         model_path=model_path,
+        baseline_model_path=baseline_model_path,
         training_phase=training_phase,
         report_dir=report_dir,
     )
     policy = evaluator.load_policy() if learner_mode == "model" else None
+    baseline_policy = evaluator.load_policy(baseline_model_path) if baseline_model_path else None
+
     if learner_mode == "model" and policy is None:
         raise RuntimeError(f"Nie udało się wczytać polityki z {model_path}")
     result = evaluator._evaluate_suite(
         policy,
+        baseline_policy=baseline_policy,
         suite=suite,
         stage=stage,
         step=step,
@@ -315,11 +320,13 @@ class BasePokerEvaluator:
         self,
         num_tournaments: int = config.EVAL_TOURNAMENTS_PER_SUITE,
         model_path: str | Path = "model.pth",
+        baseline_model_path: str | Path | None = None,
         training_phase: int | str = config.TRAINING_PHASE,
         report_dir: str | Path | None = None,
     ) -> None:
         self.num_tournaments = num_tournaments
         self.model_path = Path(model_path)
+        self.baseline_model_path = Path(baseline_model_path) if baseline_model_path else None
         self.training_phase = training_phase
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.report_dir = Path(report_dir) if report_dir else evaluation_dir(self.algorithm_name)
@@ -329,13 +336,13 @@ class BasePokerEvaluator:
             debug=False,
         )
 
-    def load_policy(self):
+    def load_policy(self, path: Path | None = None):
         raise NotImplementedError("Podklasa musi zaimplementować ładowanie polityki")
 
     def evaluate(
         self,
         *,
-        suites: tuple[str, ...] = EVALUATION_SUITES,
+        suites: tuple[str, ...] | None = None,
         stage: str = "manual",
         step: int = 0,
         seed_base: int = config.EVAL_VALIDATION_SEED,
@@ -343,6 +350,10 @@ class BasePokerEvaluator:
         learner_mode: str = "model",
     ) -> dict[str, EvaluationResult]:
         """Uruchom wszystkie wskazane zestawy i zwróć wyniki w pamięci."""
+        if suites is None:
+            # Domyślnie uruchamiamy test 'baseline' tylko jeśli podano ścieżkę do modelu bazowego
+            suites = tuple(s for s in EVALUATION_SUITES if s != "baseline" or self.baseline_model_path is not None)
+
         unknown = set(suites) - set(EVALUATION_SUITES)
         if unknown:
             raise ValueError(f"Nieznane zestawy ewaluacyjne: {sorted(unknown)}")
@@ -354,11 +365,13 @@ class BasePokerEvaluator:
             f"\nEwaluacja {self.algorithm_name.upper()} ({stage}, krok {step:,}) "
             f"na urządzeniu {self.device}."
         )
+
         suite_arguments = [
             (
                 self.__class__,
                 self.num_tournaments,
                 self.model_path,
+                self.baseline_model_path,
                 self.training_phase,
                 self.report_dir,
                 suite,
@@ -391,11 +404,13 @@ class BasePokerEvaluator:
             # szybsze dla pojedynczego zestawu i stanowi lekki fallback dla
             # środowisk, w których procesy potomne są niedostępne.
             policy = self.load_policy() if learner_mode == "model" else None
+            baseline_policy = self.load_policy(self.baseline_model_path) if self.baseline_model_path else None
             if learner_mode == "model" and policy is None:
                 return {}
             results = {
                 suite: self._evaluate_suite(
                     policy,
+                    baseline_policy=baseline_policy,
                     suite=suite,
                     stage=stage,
                     step=step,
@@ -416,6 +431,7 @@ class BasePokerEvaluator:
         self,
         policy,
         *,
+        baseline_policy=None,
         suite: str,
         stage: str,
         step: int,
@@ -461,6 +477,9 @@ class BasePokerEvaluator:
                         opponents[agent],
                         legal_actions,
                         rng,
+                        baseline_policy=baseline_policy,
+                        observation=obs,
+                        mask=mask,  
                     )
 
                 self.env.step(action)
@@ -525,12 +544,23 @@ class BasePokerEvaluator:
             )
         return opponents
 
-    @staticmethod
+
+    @classmethod
     def _opponent_action(
+        cls,
         opponent_type: str,
         legal_actions: np.ndarray,
         rng: np.random.Generator,
+        *,
+        baseline_policy=None,
+        observation: np.ndarray | None = None,
+        mask: np.ndarray | None = None,
     ) -> int:
+        if opponent_type == "baseline":
+            if baseline_policy is None or observation is None or mask is None:
+                raise ValueError("Brak polityki bazowej lub obserwacji do wykonania ruchu baseline.")
+            return cls._policy_action(baseline_policy, observation, mask)
+        
         if opponent_type == "passive":
             if schema.ACTION_CHECK_CALL in legal_actions:
                 return schema.ACTION_CHECK_CALL

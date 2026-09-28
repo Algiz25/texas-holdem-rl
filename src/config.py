@@ -45,7 +45,7 @@ EVAL_TOURNAMENTS_PER_SUITE = 1000
 # Test końcowy korzysta z większej próby i innego zakresu seedów niż
 # walidacja. 200 turniejów na zestaw ogranicza wariancję, ale nie wydłuża
 # nadmiernie pierwszego lokalnego treningu na bezwentylatorowym MacBooku.
-FINAL_EVAL_TOURNAMENTS_PER_SUITE = 200
+FINAL_EVAL_TOURNAMENTS_PER_SUITE = 1000
 EVAL_VALIDATION_SEED = 20_260
 EVAL_FINAL_SEED = 90_260
 
@@ -148,7 +148,7 @@ PPO_BUFFER_SIZE = 16384
 PPO_BATCH_SIZE = 2048
 
 # Dla macbooka
-PPO_NUM_TRAIN_ENVS = 8
+# PPO_NUM_TRAIN_ENVS = 8
 
 # Dla Borian komputer
 PPO_NUM_TRAIN_ENVS = 4

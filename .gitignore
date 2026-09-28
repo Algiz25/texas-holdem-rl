@@ -32,5 +32,9 @@ checkpoints/**/evaluations/
 checkpoints/*/*.log
 checkpoints/*/*.pid
 checkpoints/*/*.lock
+checkpoints/ppo/
 
 scripts/raport_generator.py
+scripts/raport_generator_phase2.py
+
+PPO_Phase2_Report.pdf
