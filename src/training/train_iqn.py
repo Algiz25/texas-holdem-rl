@@ -24,6 +24,14 @@ from evaluation.evaluator_iqn import IQNEvaluator
 from models import PokerFeatureExtractor
 from paths import iqn_run_dir, tensorboard_run_dir
 
+def extract_model_weights(policy_state_dict: dict) -> dict:
+    """Wyciąga same wagi modelu z polityki IQN i przenosi je na CPU dla workerów."""
+    return {
+        k.replace("model.", ""): v.cpu() 
+        for k, v in policy_state_dict.items() 
+        if k.startswith("model.")
+    }
+
 from training.base_trainer import (
     BasePokerTrainer,
     save_training_state,
@@ -34,7 +42,7 @@ from training.base_trainer import (
 
 RUN_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
-def phase_one_epsilon(env_step: int, tau: int | None = None) -> float:
+def get_current_epsilon(env_step: int, tau: int | None = None) -> float:
     """Wykładniczo zmniejsz eksplorację według liczby decyzji ucznia."""
     tau = tau or config.IQN_PHASE1_EPS_TAU
     if tau <= 0:
@@ -51,14 +59,16 @@ class IQNPokerTrainer(BasePokerTrainer):
         start_step: int | None = None,
         run_name: str = "iqn",
         epsilon_tau: int = config.IQN_PHASE1_EPS_TAU,
+        base_model_path: Path | None = None,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, baseline_model_path=base_model_path, **kwargs) 
         self.resume_path = resume_path
         self.requested_start_step = start_step
         self.starting_step = 0
         self.run_name = run_name
         self.epsilon_tau = epsilon_tau
+        self.base_model_path = base_model_path
 
     def setup_and_train(self):
         # Konfiguracja sieci
@@ -101,23 +111,52 @@ class IQNPokerTrainer(BasePokerTrainer):
             target_update_freq=config.IQN_TARGET_NET_UPDATE,
         ).to(self.device)
 
+        if self.training_phase == 2:
+            if not self.base_model_path and not self.resume_path:
+                raise ValueError("Faza 2 wymaga podania --base-model (np. best.pth z Fazy 1).")
+            
+            if self.base_model_path:
+                print(f"Ładowanie modelu bazowego z {self.base_model_path}...")
+                base_state = torch.load(self.base_model_path, map_location=self.device, weights_only=True)
+                
+                if "algorithm_state" not in base_state:
+                    policy_learner.load_state_dict(base_state)
+                else:
+                    algo_state = base_state["algorithm_state"]
+                    if "_optimizers" in algo_state:
+                        del algo_state["_optimizers"]
+                    policy_learner.load_state_dict(self.algo_state, strict=False)
+
+                # Rozsyłamy wagi do środowisk (Latest Self i pierwszy Historical Self)
+                model_weights = extract_model_weights(policy_learner.state_dict())
+                self.train_envs.set_env_attr("latest_model_weights", model_weights)
+                self.train_envs.set_env_attr("new_historical_model_weights", model_weights)
+                self.test_envs.set_env_attr("latest_model_weights", model_weights)
+                self.test_envs.set_env_attr("new_historical_model_weights", model_weights)
+                print("Rozesłano model bazowy do przeciwników w środowiskach.")
+
         if resume_payload is not None:
             if "algorithm_state" in resume_payload:
+                if resume_payload.get("step_unit") != "learner_decisions":
+                    raise ValueError("Ten stan treningu pochodzi ze starego kolektora wieloagentowego.")
                 algorithm.load_state_dict(resume_payload["algorithm_state"])
                 self.starting_step = int(resume_payload["completed_env_steps"])
                 self.best_validation_score = float(resume_payload.get("best_validation_score", float("-inf")))
                 saved_tau = int(resume_payload.get("epsilon_tau", config.IQN_PHASE1_EPS_TAU))
                 if saved_tau != self.epsilon_tau:
                     raise ValueError(f"Checkpoint korzystał z innego tau: {saved_tau:,}, obecnie {self.epsilon_tau:,}.")
+                
+                # Jeśli wznawiamy Fazę 2, musimy też rozesłać wagi wznowionego modelu do środowisk
+                if self.training_phase == 2:
+                    model_weights = extract_model_weights(algorithm.policy.state_dict())
+                    self.train_envs.set_env_attr("latest_model_weights", model_weights)
+                    self.test_envs.set_env_attr("latest_model_weights", model_weights)
             else:
                 self.starting_step = int(self.requested_start_step)
 
             interval = self.evaluation_interval_steps
             self.next_evaluation_step = (self.starting_step // interval + 1) * interval
             print(f"Wznowiono IQN od kroku {self.starting_step:,} z '{self.resume_path}'.")
-
-        if self.training_phase != 1:
-            raise NotImplementedError(f"Nieobsługiwana faza IQN: {self.training_phase}")
 
         # Kolektory
         buffer = VectorReplayBuffer(config.IQN_BUFFER_SIZE, len(self.train_envs))
@@ -155,13 +194,26 @@ class IQNPokerTrainer(BasePokerTrainer):
 
         def train_fn(epoch, env_step):
             global_step = self.starting_step + env_step
-            eps = phase_one_epsilon(global_step, self.epsilon_tau)
+            eps = get_current_epsilon(global_step, self.epsilon_tau)
             algorithm.policy.set_eps_training(eps)
 
             writer.add_scalar("training/epsilon", eps, global_step=global_step)
             writer.add_scalar("training/replay_buffer_size", len(buffer), global_step=global_step)
 
             ensure_finite_model(net_learner, global_step)
+
+            if self.training_phase == 2:
+                # Co ewaluację aktualizujemy "Latest Self"
+                if evaluation_due:
+                    model_weights = extract_model_weights(algorithm.policy.state_dict())
+                    self.train_envs.set_env_attr("latest_model_weights", model_weights)
+                    self.test_envs.set_env_attr("latest_model_weights", model_weights)
+                
+                # Co pełny zapis stanu dodajemy model do "Historical Self"
+                if global_step > 0 and global_step % config.IQN_FULL_STATE_INTERVAL_DECISIONS == 0:
+                    model_weights = extract_model_weights(algorithm.policy.state_dict())
+                    self.train_envs.set_env_attr("new_historical_model_weights", model_weights)
+                    self.test_envs.set_env_attr("new_historical_model_weights", model_weights)
 
             evaluation_due = global_step >= self.next_evaluation_step
             if evaluation_due:
@@ -236,7 +288,7 @@ class IQNPokerTrainer(BasePokerTrainer):
             torch.save(algorithm.policy.state_dict(), interrupted_path)
             torch.save(algorithm.policy.state_dict(), self.checkpoint_dir / "latest.pth")
             
-            eps = phase_one_epsilon(interrupted_step, self.epsilon_tau)
+            eps = get_current_epsilon(interrupted_step, self.epsilon_tau)
             save_training_state(
                 algorithm,
                 interrupted_step,
@@ -257,7 +309,7 @@ class IQNPokerTrainer(BasePokerTrainer):
         self.run_periodic_evaluation(env_step=final_step, learner_policy=algorithm.policy)
         self.run_final_evaluation(learner_policy=algorithm.policy, env_step=final_step)
         
-        eps = phase_one_epsilon(final_step, self.epsilon_tau)
+        eps = get_current_epsilon(final_step, self.epsilon_tau)
         save_training_state(
             algorithm,
             final_step,
@@ -288,6 +340,12 @@ def parse_args() -> argparse.Namespace:
         "--evaluation-interval", type=int, default=config.IQN_EVAL_INTERVAL_DECISIONS,
         help="Odstęp pomiędzy pełnymi walidacjami, liczony w decyzjach IQN."
     )
+    parser.add_argument(
+        "--base-model",
+        type=Path,
+        help="Ścieżka do najlepszego modelu z Fazy 1 (wymagane w Fazie 2)."
+    )
+
     args = parser.parse_args()
     
     if args.actions <= 0 or args.actions % config.IQN_STEPS_PER_EPOCH != 0:
@@ -312,11 +370,11 @@ if __name__ == "__main__":
     checkpoint_dir = iqn_run_dir(args.run_name)
     
     train_env_factories = [
-        partial(make_learner_env, args.seed + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + worker_index * 1_000_000, algo_name="iqn")
         for worker_index in range(config.IQN_NUM_TRAIN_ENVS)
     ]
     test_env_factories = [
-        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000, algo_name="iqn")
         for worker_index in range(config.IQN_NUM_TEST_ENVS)
     ]
     
@@ -350,5 +408,6 @@ if __name__ == "__main__":
             start_step=args.start_step,
             run_name=args.run_name,
             epsilon_tau=args.epsilon_tau,
+            base_model_path=args.base_model
         )
         trainer.setup_and_train()

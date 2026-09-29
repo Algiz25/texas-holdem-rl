@@ -410,11 +410,11 @@ if __name__ == "__main__":
     checkpoint_dir = PPO_CHECKPOINT_DIR / args.run_name
     
     train_env_factories = [
-        partial(make_learner_env, args.seed + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + worker_index * 1_000_000, algo_name="ppo")
         for worker_index in range(config.PPO_NUM_TRAIN_ENVS)
     ]
     test_env_factories = [
-        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000, algo_name="ppo")
         for worker_index in range(config.PPO_NUM_TEST_ENVS)
     ]
     

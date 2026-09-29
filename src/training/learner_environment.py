@@ -24,7 +24,10 @@ import torch
 
 import config
 from environment import TexasHoldemTournament
-from models import MaskedActor
+from models import MaskedActor, PokerFeatureExtractor
+from tianshou.utils.net.discrete import ImplicitQuantileNetwork
+import torch.nn as nn
+
 
 
 # Korzystamy z tego samego rozkładu co ewaluator. Przeciwnik Mixed nie może
@@ -51,9 +54,11 @@ class PokerLearnerEnv(gym.Env):
         learner: str = "player_0",
         opponent_weights: Mapping[str, float] | None = None,
         initial_seed: int | None = None,
+        algo_name: str = "ppo",
     ) -> None:
         super().__init__()
         self.learner = learner
+        self.algo_name = algo_name
         self.poker_env = TexasHoldemTournament(
             num_players=config.NUM_PLAYERS,
             starting_chips=config.STARTING_CHIPS,
@@ -89,8 +94,8 @@ class PokerLearnerEnv(gym.Env):
         self.total_table_actions = 0
 
         # Pamięć dla modeli Self-Play ---
-        self.latest_model: MaskedActor | None = None
-        self.historical_models: list[MaskedActor] = []
+        self.latest_model: nn.Module | None = None
+        self.historical_models: list[nn.Module] = []
         self.max_historical = getattr(config, "PHASE2_MAX_HISTORICAL_MODELS", 100)
 
         # Tianshou rozpoznaje maskowanie akcji po nazwach ``obs`` i ``mask``.
@@ -110,41 +115,62 @@ class PokerLearnerEnv(gym.Env):
         return None
 
     @latest_model_weights.setter
-    def latest_model_weights(self, actor_state_dict: dict) -> None:
-        """Aktualizuje wagi przeciwnika 'latest_self' poprzez przypisanie atrybutu."""
+    def latest_model_weights(self, model_state_dict: dict) -> None:
         if self.latest_model is None:
-            self.latest_model = MaskedActor().to("cpu")
+            if self.algo_name == "iqn":
+                feature_net = PokerFeatureExtractor(state_shape=config.OBSERVATION_SIZE).to("cpu")
+                self.latest_model = ImplicitQuantileNetwork(
+                    preprocess_net=feature_net,
+                    action_shape=config.ACTION_SPACE,
+                    num_cosines=config.IQN_NUM_COSINES,
+                ).to("cpu")
+            else:
+                self.latest_model = MaskedActor().to("cpu")
             self.latest_model.eval()
-        self.latest_model.load_state_dict(actor_state_dict)
+        self.latest_model.load_state_dict(model_state_dict)
 
     @property
     def new_historical_model_weights(self) -> dict | None:
         return None
 
     @new_historical_model_weights.setter
-    def new_historical_model_weights(self, actor_state_dict: dict) -> None:
-        """Dodaje nowy model do puli 'historical_self' poprzez przypisanie atrybutu."""
-        model = MaskedActor().to("cpu")
-        model.load_state_dict(actor_state_dict)
+    def new_historical_model_weights(self, model_state_dict: dict) -> None:
+        if self.algo_name == "iqn":
+            feature_net = PokerFeatureExtractor(state_shape=config.OBSERVATION_SIZE).to("cpu")
+            model = ImplicitQuantileNetwork(
+                preprocess_net=feature_net,
+                action_shape=config.ACTION_SPACE,
+                num_cosines=config.IQN_NUM_COSINES,
+            ).to("cpu")
+        else:
+            model = MaskedActor().to("cpu")
+            
+        model.load_state_dict(model_state_dict)
         model.eval()
         
         self.historical_models.append(model)
         if len(self.historical_models) > self.max_historical:
-            # Losowo usuwamy jeden ze starszych modeli, aby utrzymać limit
             idx_to_remove = self._rng.integers(len(self.historical_models))
             self.historical_models.pop(idx_to_remove)
 
-    def _get_nn_action(self, model: MaskedActor, obs: np.ndarray, mask: np.ndarray) -> int:
-        """Pobiera akcję z sieci neuronowej zachowując stochastyczność (sampling)."""
+    def _get_nn_action(self, model: nn.Module, obs: np.ndarray, mask: np.ndarray) -> int:
         with torch.no_grad():
             obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
             mask_tensor = torch.as_tensor(mask, dtype=torch.bool).unsqueeze(0)
             
-            logits, _ = model(obs_tensor)
+            if self.algo_name == "iqn":
+                # IQN zwraca (out, taus), hidden. out ma kształt (batch, sample_size, action_dim)
+                (out, _), _ = model(obs_tensor, sample_size=config.IQN_SAMPLE_SIZE)
+                logits = out.mean(dim=1) # Uśredniamy kwantyle, żeby dostać Q-values
+                
+                temperature = 0.01
+                logits = logits / temperature
+            else:
+                # Dla PPO i SAC model od razu zwraca poprawne, znormalizowane logity
+                logits, _ = model(obs_tensor)
+                
             # Maskowanie niedozwolonych akcji
             logits = torch.where(mask_tensor, logits, torch.tensor(-1e9))
-            
-            # W self-play chcemy zachować eksplorację, więc próbkujemy z rozkładu (jak w PPO)
             dist = torch.distributions.Categorical(logits=logits)
             action = dist.sample().item()
             
@@ -343,6 +369,5 @@ class PokerLearnerEnv(gym.Env):
         self.poker_env.close()
 
 
-def make_learner_env(initial_seed: int | None = None) -> PokerLearnerEnv:
-    """Fabryka na poziomie modułu, którą można bezpiecznie wysłać do procesu."""
-    return PokerLearnerEnv(initial_seed=initial_seed)
+def make_learner_env(initial_seed: int | None = None, algo_name: str = "ppo") -> PokerLearnerEnv:
+    return PokerLearnerEnv(initial_seed=initial_seed, algo_name=algo_name)
