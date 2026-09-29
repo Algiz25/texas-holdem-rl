@@ -44,12 +44,12 @@ RUN_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 def get_current_epsilon(env_step: int, tau: int | None = None) -> float:
     """Wykładniczo zmniejsz eksplorację według liczby decyzji ucznia."""
-    tau = tau or config.IQN_PHASE1_EPS_TAU
+    tau = tau or config.IQN_EPS_TAU
     if tau <= 0:
         raise ValueError("Stała czasowa tau musi być dodatnia")
     
     decay = math.exp(-max(env_step, 0) / tau)
-    return config.IQN_PHASE1_EPS_MIN + (config.IQN_EPS_MAX - config.IQN_PHASE1_EPS_MIN) * decay
+    return config.IQN_EPS_MIN + (config.IQN_EPS_MAX - config.IQN_EPS_MIN) * decay
 
 class IQNPokerTrainer(BasePokerTrainer):
     def __init__(
@@ -58,7 +58,7 @@ class IQNPokerTrainer(BasePokerTrainer):
         resume_path: Path | None = None,
         start_step: int | None = None,
         run_name: str = "iqn",
-        epsilon_tau: int = config.IQN_PHASE1_EPS_TAU,
+        epsilon_tau: int = config.IQN_EPS_TAU,
         base_model_path: Path | None = None,
         **kwargs,
     ):
@@ -142,7 +142,7 @@ class IQNPokerTrainer(BasePokerTrainer):
                 algorithm.load_state_dict(resume_payload["algorithm_state"])
                 self.starting_step = int(resume_payload["completed_env_steps"])
                 self.best_validation_score = float(resume_payload.get("best_validation_score", float("-inf")))
-                saved_tau = int(resume_payload.get("epsilon_tau", config.IQN_PHASE1_EPS_TAU))
+                saved_tau = int(resume_payload.get("epsilon_tau", config.IQN_EPS_TAU))
                 if saved_tau != self.epsilon_tau:
                     raise ValueError(f"Checkpoint korzystał z innego tau: {saved_tau:,}, obecnie {self.epsilon_tau:,}.")
                 
@@ -333,7 +333,7 @@ def parse_args() -> argparse.Namespace:
         help="Liczba nowych decyzji IQN (domyślnie 250 000)."
     )
     parser.add_argument(
-        "--epsilon-tau", type=int, default=config.IQN_PHASE1_EPS_TAU,
+        "--epsilon-tau", type=int, default=config.IQN_EPS_TAU,
         help="Stała czasowa tau dla wykładniczego zaniku epsilona."
     )
     parser.add_argument(
