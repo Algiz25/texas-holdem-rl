@@ -428,18 +428,31 @@ class TexasHoldemTournament(AECEnv):
 
             if newly_eliminated:
                 # Gracze odpadający w tym samym rozdaniu zajmują ex aequo
-                # średnią z przypadających im miejsc.
+                # średnią z przypadających im miejsc (np. jeśli odpada 3. i 4. gracz naraz,
+                # obaj zajmują miejsce 3.5).
                 tied_position = (active_count + 1 + active_before) / 2
                 for agent in newly_eliminated:
                     self.finishing_positions[agent] = tied_position
+                    # Kara/Nagroda za zajęte miejsce
+                    # Wzór (2.5 - pozycja) * 2.0 daje nam:
+                    # 4. miejsce -> -3.0
+                    # 3. miejsce -> -1.0
+                    # 2. miejsce -> +1.0
+                    placement_reward = (2.5 - tied_position) * 2.0
+                    self.rewards[agent] += placement_reward
                     
             if active_count <= 1:
                 # Ostatni na polu bitwy, turniej zakończony
                 winner = max(self.tournament_chips, key=self.tournament_chips.get)
                 self.finishing_positions[winner] = 1.0
+
+                # DODANE: Główna nagroda za wygranie turnieju
+                # 1. miejsce -> +3.0
+                placement_reward = (2.5 - 1.0) * 2.0
+                self.rewards[winner] += placement_reward
+
                 for agent in self.agents:
                     self.terminations[agent] = True
-                    # self.rewards[agent] = float(self.tournament_chips[agent] - self.starting_chips) # nagroda na koniec turnieju - może warto dodać większą za wygranie?
                 # Ustawiamy usuwanie ostatniego agenta
                 self.agent_selection = self._deads_step_first()
             else:

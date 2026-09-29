@@ -32,3 +32,5 @@ checkpoints/**/evaluations/
 checkpoints/*/*.log
 checkpoints/*/*.pid
 checkpoints/*/*.lock
+
+scripts/raport_generator.py

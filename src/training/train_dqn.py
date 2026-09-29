@@ -1,5 +1,4 @@
 import argparse
-import fcntl
 import os
 import re
 from contextlib import contextmanager
@@ -18,7 +17,7 @@ from tianshou.utils import TensorboardLogger
 
 import config
 from training.base_trainer import BasePokerTrainer
-from training.dqn_environment import make_dqn_training_env
+from training.learner_environment import make_learner_env
 from evaluation.evaluator_dqn import DQNEvaluator
 from models import MaskedActor
 from paths import DQN_CHECKPOINT_DIR, dqn_run_dir, tensorboard_run_dir
@@ -65,6 +64,7 @@ def save_training_state(
     temporary_path.replace(path)
 
 
+# Zmieniam tutaj fcntl
 @contextmanager
 def single_training_process():
     """Nie pozwól przypadkowo uruchomić dwóch treningów w tym samym katalogu."""
@@ -72,11 +72,20 @@ def single_training_process():
     lock_path = DQN_CHECKPOINT_DIR / "training.lock"
     with lock_path.open("a+", encoding="utf-8") as lock_file:
         try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
+            # Dla windowsa
+            if os.name == "nt":
+                import msvcrt
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            # Dla Unix/Linux
+            else:
+                import fcntl
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as error:
             raise RuntimeError(
                 "Inny trening DQN już działa. Nie uruchamiaj drugiego procesu."
             ) from error
+        
         lock_file.seek(0)
         lock_file.truncate()
         lock_file.write(f"pid={os.getpid()}\n")
@@ -84,7 +93,13 @@ def single_training_process():
         try:
             yield
         finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+            if os.name == "nt":
+                import msvcrt
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 def phase_one_epsilon(env_step: int, decay_steps: int | None = None) -> float:
     """Liniowo zmniejsz eksplorację według liczby decyzji ucznia.
@@ -103,12 +118,12 @@ def phase_one_epsilon(env_step: int, decay_steps: int | None = None) -> float:
     )
 
 
-def configure_macbook_cpu_runtime() -> None:
-    """Ustaw PyTorch zgodnie z benchmarkiem wykonanym na MacBooku Air M2.
-
-    Osiem osobnych procesów zbiera doświadczenia ze środowisk pokerowych.
-    Aktualizacja małej sieci DQN jest natomiast najszybsza na jednym wątku
-    CPU; MPS i wielowątkowy PyTorch dodawały więcej narzutu niż pracy.
+def configure_cpu_runtime() -> None:
+    """Zapobiega przeciążeniu procesora przy wielu środowiskach.
+    
+    Gdy używamy SubprocVectorEnv (np. 8 procesów), domyślne zachowanie PyTorch
+    (używanie wszystkich rdzeni przez każdy proces) prowadzi do drastycznego
+    spadku wydajności. Ograniczenie do 1 wątku na proces jest optymalne.
     """
     torch.set_num_threads(config.TORCH_NUM_THREADS)
     torch.set_num_interop_threads(config.TORCH_NUM_INTEROP_THREADS)
@@ -538,16 +553,16 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     validate_phase_one_configuration()
-    configure_macbook_cpu_runtime()
+    configure_cpu_runtime()
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     checkpoint_dir = dqn_run_dir(args.run_name)
     train_env_factories = [
-        partial(make_dqn_training_env, args.seed + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + worker_index * 1_000_000)
         for worker_index in range(config.DQN_NUM_TRAIN_ENVS)
     ]
     test_env_factories = [
-        partial(make_dqn_training_env, args.seed + 100_000_000 + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000)
         for worker_index in range(config.DQN_NUM_TEST_ENVS)
     ]
     print(
@@ -570,7 +585,7 @@ if __name__ == "__main__":
             num_test_envs=config.DQN_NUM_TEST_ENVS,
             max_epochs=args.actions // config.DQN_STEPS_PER_EPOCH,
             steps_per_epoch=config.DQN_STEPS_PER_EPOCH,
-            env_factory=make_dqn_training_env,
+            env_factory=make_learner_env,
             evaluation_interval_steps=args.evaluation_interval,
             checkpoint_dir=checkpoint_dir,
             train_env_factories=train_env_factories,
