@@ -122,10 +122,12 @@ class BasePokerTrainer:
         checkpoint_dir=None,
         train_env_factories=None,
         test_env_factories=None,
+        baseline_model_path=None,
     ):
         self.algo_name = algo_name
         self.training_phase = training_phase
         self.evaluator_class = evaluator_class
+        self.baseline_model_path = baseline_model_path
         self.max_epochs = max_epochs
         self.steps_per_epoch = steps_per_epoch
         self.total_steps = max_epochs * steps_per_epoch
@@ -189,10 +191,12 @@ class BasePokerTrainer:
         evaluator = self.evaluator_class(
             num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
             model_path=checkpoint_path,
+            baseline_model_path=self.baseline_model_path,
             training_phase=self.training_phase,
             report_dir=self.evaluation_report_dir,
         )
         results = evaluator.evaluate(
+            suites=config.EVAL_SUITES,
             stage="validation",
             step=env_step,
             seed_base=config.EVAL_VALIDATION_SEED,
@@ -235,10 +239,12 @@ class BasePokerTrainer:
         evaluator = self.evaluator_class(
             num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
             model_path=checkpoint_path,
+            baseline_model_path=self.baseline_model_path,
             training_phase=self.training_phase,
             report_dir=self.evaluation_report_dir,
         )
         results = evaluator.evaluate(
+            suites=config.EVAL_SUITES,
             stage="baseline_untrained",
             step=0,
             seed_base=config.EVAL_VALIDATION_SEED,
@@ -246,6 +252,7 @@ class BasePokerTrainer:
         # Losowy uczeń jest stałym punktem odniesienia niezależnym od
         # inicjalizacji sieci. Liczymy go raz, na identycznych rozdaniach.
         evaluator.evaluate(
+            suites=config.EVAL_SUITES,
             stage="baseline_random",
             step=0,
             seed_base=config.EVAL_VALIDATION_SEED,
@@ -290,10 +297,12 @@ class BasePokerTrainer:
         evaluator = self.evaluator_class(
             num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
             model_path=final_path,
+            baseline_model_path=self.baseline_model_path,
             training_phase=self.training_phase,
             report_dir=self.evaluation_report_dir,
         )
         final_results = evaluator.evaluate(
+            suites=config.EVAL_SUITES,
             stage="final_last",
             step=env_step,
             seed_base=config.EVAL_FINAL_SEED,
@@ -308,10 +317,12 @@ class BasePokerTrainer:
             best_evaluator = self.evaluator_class(
                 num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
                 model_path=best_path,
+                baseline_model_path=self.baseline_model_path,
                 training_phase=self.training_phase,
                 report_dir=self.evaluation_report_dir,
             )
             best_results = best_evaluator.evaluate(
+                suites=config.EVAL_SUITES,
                 stage="final_best",
                 step=env_step,
                 seed_base=config.EVAL_FINAL_SEED,

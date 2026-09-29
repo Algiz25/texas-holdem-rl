@@ -3,7 +3,7 @@ from observation.schema import OBSERVATION_SIZE
 
 # ZMIENNE ŚRODOWISKOWE
 # póki co jedyna dostępna faza to 1
-TRAINING_PHASE = 1
+TRAINING_PHASE = 2
 ACTION_SPACE = 5    # nie zmieniać
 STARTING_CHIPS = 200
 NUM_PLAYERS = 4     # nie zmieniać
@@ -130,21 +130,13 @@ PPO_FULL_STATE_INTERVAL_DECISIONS = 100_000
 
 
 # ZMIENNE TRENINGOWE SAC
-SAC_ACTOR_LR = 1e-4
-SAC_CRITIC_LR = 1e-4
-SAC_ALPHA_LR = 3e-4
 SAC_GAMMA = 0.99
 SAC_TAU = 0.005
 SAC_AUTO_ALPHA = True
-SAC_ALPHA = 0.05  # Używane jako wartość początkowa jeśli AUTO_ALPHA=True, lub stała jeśli False
+SAC_ALPHA = 0.05  # Wartość startowa
 SAC_ALPHA_LR = 3e-4
-SAC_TARGET_ENTROPY_RATIO = 0.15
 
-SAC_BUFFER_SIZE = 500_000
-SAC_BUFFER_WARMUP = 10_000
-SAC_BATCH_SIZE = 1024
-SAC_UPDATE_RATIO = 0.5
-
+SAC_BATCH_SIZE = 512
 SAC_NUM_TRAIN_ENVS = 4
 SAC_NUM_TEST_ENVS = 1
 
@@ -152,8 +144,23 @@ SAC_MAX_EPOCHS = 50
 SAC_STEPS_PER_EPOCH = 10_000
 SAC_COLLECTION_STEPS = 1_000
 
-SAC_EVAL_INTERVAL_DECISIONS = 10_000
+SAC_EVAL_INTERVAL_DECISIONS = 50_000
 SAC_FULL_STATE_INTERVAL_DECISIONS = 100_000
+
+if TRAINING_PHASE == 1:
+    SAC_ACTOR_LR = 1e-4
+    SAC_CRITIC_LR = 1e-4
+    SAC_TARGET_ENTROPY_RATIO = 0.15
+    SAC_UPDATE_RATIO = 0.5
+    SAC_BUFFER_SIZE = 500_000
+    SAC_BUFFER_WARMUP = 10_000
+else:
+    SAC_ACTOR_LR = 5e-5
+    SAC_CRITIC_LR = 5e-5
+    SAC_TARGET_ENTROPY_RATIO = 0.25
+    SAC_UPDATE_RATIO = 0.25
+    SAC_BUFFER_SIZE = 1_000_000
+    SAC_BUFFER_WARMUP = 10_000
 
 
 # IQN
@@ -188,13 +195,11 @@ IQN_FULL_STATE_INTERVAL_DECISIONS = 100_000
 
 # EWALUACJA
 
-# Jeden „mecz” ewaluacyjny trwa najwyżej 100 rozdań. To ważne zwłaszcza dla
-# botów Check/Call: potrafią grać bardzo długo i poprzedni limit 1000 akcji
-# ucinał większość turniejów w przypadkowym momencie. Stała liczba rozdań daje
-# porównywalną próbkę do głównej metryki bb/100.
-EVAL_MAX_HANDS_PER_MATCH = 100
+if TRAINING_PHASE == 1:
+    EVAL_SUITES = ("random", "passive", "mixed", "phase1_mix")
+else:
+    EVAL_SUITES = ("phase1_mix", "baseline")
 
-# Osobny, wysoki bezpiecznik chroni przed błędem środowiska powodującym
-# nieskończoną pętlę. Osiągnięcie tego limitu jest raportowane jako awaria,
-# w przeciwieństwie do planowego zakończenia po 100 rozdaniach.
+EVAL_MAX_HANDS_PER_MATCH = 100
 EVAL_MAX_ACTIONS_PER_MATCH = 5_000
+
