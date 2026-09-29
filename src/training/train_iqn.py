@@ -27,7 +27,7 @@ from paths import iqn_run_dir, tensorboard_run_dir
 def extract_model_weights(policy_state_dict: dict) -> dict:
     """Wyciąga same wagi modelu z polityki IQN i przenosi je na CPU dla workerów."""
     return {
-        k.replace("model.", ""): v.cpu() 
+        k.removeprefix("model."): v.cpu() 
         for k, v in policy_state_dict.items() 
         if k.startswith("model.")
     }

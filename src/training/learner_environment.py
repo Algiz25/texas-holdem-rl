@@ -159,9 +159,9 @@ class PokerLearnerEnv(gym.Env):
             mask_tensor = torch.as_tensor(mask, dtype=torch.bool).unsqueeze(0)
             
             if self.algo_name == "iqn":
-                # IQN zwraca (out, taus), hidden. out ma kształt (batch, sample_size, action_dim)
+                # Kształt out to (batch, action_dim, sample_size), np. (1, 5, 32)
                 (out, _), _ = model(obs_tensor, sample_size=config.IQN_SAMPLE_SIZE)
-                logits = out.mean(dim=1) # Uśredniamy kwantyle, żeby dostać Q-values
+                logits = out.mean(dim=2) # Uśredniamy kwantyle, żeby dostać Q-values
                 
                 temperature = 0.01
                 logits = logits / temperature
