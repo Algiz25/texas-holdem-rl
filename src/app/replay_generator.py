@@ -1,18 +1,22 @@
 """Config dla tego pliku to app_config. Rozgrywa 1 turniej z wybranymi graczami i zapisuje jego przebieg do pliku .json"""
 
 import json
-import time
 import torch
 import numpy as np
 from tianshou.data import Batch
+
+# Algorytmy Tianshou
 from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
+from tianshou.algorithm.modelfree.reinforce import ProbabilisticActorPolicy
+from tianshou.algorithm.modelfree.discrete_sac import DiscreteSACPolicy
+from tianshou.algorithm.modelfree.iqn import IQNPolicy
+from tianshou.utils.net.discrete import ImplicitQuantileNetwork
 from torch.distributions import Categorical
 
 import config
 import app.app_config
 from environment import TexasHoldemTournament
-from models import MaskedActor, Critic, CPUActionActorPolicy
-from opponents import PassivePolicy, AggressivePolicy, SeededMixedPolicy
+from models import MaskedActor, Critic, PokerFeatureExtractor
 from observation.derived import hand_category
 from rlcard.games.limitholdem import PlayerStatus
 
@@ -29,14 +33,53 @@ CATEGORY_NAMES = {
     4: "Straight", 5: "Flush", 6: "Full House", 7: "Four of a kind", 8: "Straight Flush"
 }
 
-def load_agent(agent_cfg: dict, env, device="CPU"):
-    """Inicjalizuje odpowiednią politykę w zależności od zadanego typu bota."""
+class RuleBasedAgent:
+    """Prosty agent heurystyczny niewymagający sieci neuronowej ani Tianshou."""
+    def __init__(self, behavior: str, seed: int | None = None):
+        self.behavior = behavior
+        self.rng = np.random.default_rng(seed)
+        self.mixed_weights = np.asarray(config.MIXED_ACTION_WEIGHTS, dtype=np.float32)
+        self.aggressive_weights = np.array(config.AGGRESSIVE_ACTION_WEIGHTS, dtype=np.float32)
 
+    def get_action(self, action_mask: np.ndarray, legal_actions: list[int]) -> int:
+        if self.behavior == "random":
+            return int(self.rng.choice(legal_actions))
+        
+        elif self.behavior == "passive":
+            if 1 in legal_actions: return 1
+            if 0 in legal_actions: return 0
+            return int(legal_actions[0])
+            
+        elif self.behavior == "mixed":
+            valid_w = self.mixed_weights * action_mask
+            w_sum = valid_w.sum()
+            if w_sum > 0:
+                return int(self.rng.choice(5, p=valid_w / w_sum))
+            return int(legal_actions[0])
+            
+        elif self.behavior == "aggressive":
+            valid_w = self.aggressive_weights * action_mask
+            w_sum = valid_w.sum()
+            if w_sum > 0:
+                return int(self.rng.choice(5, p=valid_w / w_sum))
+            return int(legal_actions[0])
+            
+        return int(legal_actions[0])
+
+def load_agent(agent_cfg: dict, env, device="cpu"):
+    """Inicjalizuje odpowiednią politykę Tianshou lub prostego bota."""
     agent_type = agent_cfg["type"]
     seed = agent_cfg.get("seed", None)
+    path = agent_cfg.get("path", None)
+    
     action_space = env.action_space("player_0")
     observation_space = env.observation_space("player_0")
 
+    # 1. Proste boty Heurystyczne / Losowe
+    if agent_type in ["passive", "aggressive", "mixed", "random"]:
+        return RuleBasedAgent(agent_type, seed)
+
+    # 2. Agenci RL (wymagają wczytania wag modelu)
     if agent_type == "dqn":
         net = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(device)
         policy = DiscreteQLearningPolicy(
@@ -45,25 +88,59 @@ def load_agent(agent_cfg: dict, env, device="CPU"):
             observation_space=observation_space,
             eps_inference=0.0
         )
-        policy.load_state_dict(torch.load(agent_cfg.get("path", None), map_location=device, weights_only=True))
+        policy.load_state_dict(torch.load(path, map_location=device, weights_only=True))
         policy.eval()
         return policy
+        
     elif agent_type == "ppo":
         actor = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(device)
-        critic = Critic(state_shape=config.OBSERVATION_SIZE).to(device)
         def dist_fn(logits): return Categorical(logits=logits)
-        policy = CPUActionActorPolicy(
-            actor=actor, dist_fn=dist_fn, action_space=action_space,
-            observation_space=observation_space, action_scaling=False
+        policy = ProbabilisticActorPolicy(
+            actor=actor, 
+            dist_fn=dist_fn, 
+            action_space=action_space,
+            observation_space=observation_space, 
+            action_scaling=False,
+            deterministic_eval=(config.TRAINING_PHASE == 1)
         )
-        policy.load_state_dict(torch.load(agent_cfg.get("path", None), map_location=device, weights_only=True))
+        policy.load_state_dict(torch.load(path, map_location=device, weights_only=True))
         policy.eval()
         return policy
-    elif agent_type == "passive": return PassivePolicy(action_space=action_space)
-    elif agent_type == "aggressive": return AggressivePolicy(action_space=action_space)
-    elif agent_type == "mixed": return SeededMixedPolicy(action_space=action_space, seed=seed)
-    elif agent_type == "random": return "random"
-    else: raise ValueError(f"Nieznany typ agenta: {agent_type}")
+        
+    elif agent_type == "sac":
+        actor = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(device)
+        policy = DiscreteSACPolicy(
+            actor=actor,
+            action_space=action_space,
+            observation_space=observation_space,
+            deterministic_eval=(config.TRAINING_PHASE == 1)
+        )
+        policy.load_state_dict(torch.load(path, map_location=device, weights_only=True))
+        policy.eval()
+        return policy
+        
+    elif agent_type == "iqn":
+        feature_net = PokerFeatureExtractor(state_shape=config.OBSERVATION_SIZE).to(device)
+        net = ImplicitQuantileNetwork(
+            preprocess_net=feature_net,
+            action_shape=config.ACTION_SPACE,
+            num_cosines=config.IQN_NUM_COSINES,
+        ).to(device)
+        policy = IQNPolicy(
+            model=net,
+            action_space=action_space,
+            sample_size=config.IQN_SAMPLE_SIZE,
+            online_sample_size=config.IQN_ONLINE_SAMPLE_SIZE,
+            target_sample_size=config.IQN_TARGET_SAMPLE_SIZE,
+            eps_training=0.0,
+            eps_inference=0.0
+        )
+        policy.load_state_dict(torch.load(path, map_location=device, weights_only=True))
+        policy.eval()
+        return policy
+        
+    else: 
+        raise ValueError(f"Nieznany typ agenta: {agent_type}")
 
 
 def record_tournament(seats_config, output_file="tournament_history.json"):
@@ -189,7 +266,6 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
         if not blinds_logged:
             detected_blinds = []
             
-            # Najpierw zbieramy wszystkie fizyczne wpłaty
             for p_name in env.active_agents:
                 idx = env.active_agents.index(p_name)
                 p_obj = env.rlcard_env.game.players[idx]
@@ -200,10 +276,8 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
                         "amount": float(diff)
                     })
             
-            # Sortujemy wpłaty rosnąco (najpierw Small Blind, potem Big Blind)
             detected_blinds.sort(key=lambda x: x["amount"])
             
-            # Wpisujemy posortowane ciemne do historii
             pot_acc = 0.0
             for i, b_data in enumerate(detected_blinds):
                 current_hand_data["events"].append({
@@ -219,14 +293,17 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
                 
             blinds_logged = True
 
-        policy = players[agent_id]
+        agent = players[agent_id]
         action_mask = observation['action_mask']
         legal_actions = [i for i, valid in enumerate(action_mask) if valid == 1]
         
-        # q_values = {}
-        if policy == "random":
-            action = int(np.random.choice(legal_actions))
+        # ---------------------------------------------------------
+        # DECYZJA AGENTA
+        # ---------------------------------------------------------
+        if isinstance(agent, RuleBasedAgent):
+            action = agent.get_action(action_mask, legal_actions)
         else:
+            # Agent RL (DQN, PPO, SAC, IQN)
             obs_vec = observation['observation']
             batch = Batch(
                 obs=Batch(
@@ -235,19 +312,14 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
                 ),
                 info={}
             )
-            result = policy(batch)
+            with torch.inference_mode():
+                result = agent(batch)
+            
             action = int(result.act[0])
             
             # Weryfikacja bezpieczeństwa (awaryjny FOLD lub random)
             if action_mask[action] == 0:
                 action = 0 if action_mask[0] == 1 else int(np.random.choice(legal_actions))
-                
-            # # Wyciąganie Q-Values / Logits dla analityki RL
-            # if hasattr(result, 'logits'):
-            #     logits = result.logits[0].detach().cpu().numpy() if torch.is_tensor(result.logits) else result.logits[0]
-            #     for a_idx, is_legal in enumerate(action_mask):
-            #         if is_legal:
-            #             q_values[ACTION_NAMES[a_idx]] = float(logits[a_idx])
 
         board = [get_card_str(c) for c in env.rlcard_env.game.public_cards]
         pot = float(sum(p.in_chips for p in env.rlcard_env.game.players))
@@ -266,7 +338,6 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
             "amount": 0.0, 
             "pot_before_action": pot,
             "board": board
-            # "q_values": q_values
         }
         current_hand_data["events"].append(event)
         
@@ -281,7 +352,7 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
             current_hand_data["showdown"] = showdown_data.copy()
             showdown_data.clear()
         
-        if step_count > config.MAX_STEPS_PER_TOURNAMENT:
+        if step_count > getattr(config, "MAX_STEPS_PER_TOURNAMENT", 5000):
             print("Ostrzeżenie: Przekroczono limit kroków, przerywam wcześnie.")
             break
 
@@ -297,4 +368,7 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
 
 
 if __name__ == "__main__":
-    record_tournament(app.app_config.TABLE_CONFIG, output_file=app.app_config.OUTPUT_LOCATION / app.app_config.OUPUT_FILE_NAME)
+    record_tournament(
+        app.app_config.TABLE_CONFIG, 
+        output_file=app.app_config.OUTPUT_LOCATION / app.app_config.OUPUT_FILE_NAME
+    )

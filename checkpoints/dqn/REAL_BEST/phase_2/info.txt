@@ -1,0 +1,1 @@
+Model DQN nie poprawił wyników po fazie 2 treningu. Plik step_010500000.pth jest kopią pliku uzyskanego w fazie 1.

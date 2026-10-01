@@ -32,6 +32,7 @@ PHASE2_MAX_HISTORICAL_MODELS = 100
 # Jedno źródło zapobiega sytuacji, w której bot o tej samej nazwie zachowuje
 # się inaczej podczas zbierania doświadczeń i podczas pomiaru checkpointu.
 MIXED_ACTION_WEIGHTS = (0.20, 0.45, 0.18, 0.12, 0.05)
+AGGRESSIVE_ACTION_WEIGHTS = (0.05, 0.15, 0.30, 0.40, 0.10)
 
 # ZMIENNE TRENINGOWE
 
