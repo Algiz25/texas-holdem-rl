@@ -60,7 +60,7 @@ class PPOPokerTrainer(BasePokerTrainer):
         base_model_path: Path | None = None,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, baseline_model_path=base_model_path, **kwargs)
         self.resume_path = resume_path
         self.requested_start_step = start_step
         self.starting_step = 0
@@ -80,7 +80,8 @@ class PPOPokerTrainer(BasePokerTrainer):
             dist_fn=dist_fn,
             action_space=self.env.action_space,
             observation_space=self.env.observation_space,
-            action_scaling=False
+            action_scaling=False,
+            deterministic_eval=(config.TRAINING_PHASE == 1)
         )
 
         # --- Ładowanie modelu bazowego dla Fazy 2 ---
@@ -88,14 +89,17 @@ class PPOPokerTrainer(BasePokerTrainer):
             if not self.base_model_path and not self.resume_path:
                 raise ValueError("Faza 2 wymaga podania --base-model (np. step_008110080.pth z Fazy 1).")
             
-            if self.base_model_path:
+            if self.base_model_path and not self.resume_path:
                 print(f"Ładowanie modelu bazowego z {self.base_model_path}...")
                 base_state = torch.load(self.base_model_path, map_location=self.device, weights_only=True)
-                # Jeśli to plik z ewaluacji (tylko wagi), ładujemy bezpośrednio
+                
                 if "algorithm_state" not in base_state:
                     policy_learner.load_state_dict(base_state)
                 else:
-                    policy_learner.load_state_dict(base_state["algorithm_state"])
+                    algo_state = base_state["algorithm_state"]
+                    if "_optimizers" in algo_state:
+                        del algo_state["_optimizers"]
+                    ppo_learner.load_state_dict(algo_state, strict=False)
 
                 # Rozsyłamy wagi do środowisk (Latest Self i pierwszy Historical Self)
                 actor_weights = extract_actor_weights(policy_learner.state_dict())
@@ -406,11 +410,11 @@ if __name__ == "__main__":
     checkpoint_dir = PPO_CHECKPOINT_DIR / args.run_name
     
     train_env_factories = [
-        partial(make_learner_env, args.seed + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + worker_index * 1_000_000, algo_name="ppo")
         for worker_index in range(config.PPO_NUM_TRAIN_ENVS)
     ]
     test_env_factories = [
-        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000, algo_name="ppo")
         for worker_index in range(config.PPO_NUM_TEST_ENVS)
     ]
     

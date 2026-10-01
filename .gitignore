@@ -33,8 +33,12 @@ checkpoints/*/*.log
 checkpoints/*/*.pid
 checkpoints/*/*.lock
 checkpoints/ppo/
+checkpoints/dqn/
+checkpoints/sac/
+checkpoints/iqn/
 
 scripts/raport_generator.py
 scripts/raport_generator_phase2.py
+scripts/tools
 
 PPO_Phase2_Report.pdf

@@ -441,11 +441,11 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     checkpoint_dir = dqn_run_dir(args.run_name)
     train_env_factories = [
-        partial(make_learner_env, args.seed + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + worker_index * 1_000_000, algo_name="dqn")
         for worker_index in range(config.DQN_NUM_TRAIN_ENVS)
     ]
     test_env_factories = [
-        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000, algo_name="dqn")
         for worker_index in range(config.DQN_NUM_TEST_ENVS)
     ]
     print(

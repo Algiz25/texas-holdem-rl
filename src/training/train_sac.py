@@ -24,6 +24,14 @@ from evaluation.evaluator_sac import SACEvaluator
 from models import MaskedActor, DiscreteActionCritic
 from paths import SAC_CHECKPOINT_DIR, sac_run_dir, tensorboard_run_dir
 
+def extract_actor_weights(policy_state_dict: dict) -> dict:
+    """Wyciąga same wagi Actora z polityki SAC i przenosi je na CPU dla workerów."""
+    return {
+        k.replace("actor.", ""): v.cpu() 
+        for k, v in policy_state_dict.items() 
+        if k.startswith("actor.")
+    }
+
 from training.base_trainer import (
     BasePokerTrainer,
     save_training_state,
@@ -41,13 +49,15 @@ class SACPokerTrainer(BasePokerTrainer):
         resume_path: Path | None = None,
         start_step: int | None = None,
         run_name: str = "sac",
+        base_model_path: Path | None = None,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, baseline_model_path=base_model_path, **kwargs) 
         self.resume_path = resume_path
         self.requested_start_step = start_step
         self.starting_step = 0
         self.run_name = run_name
+        self.base_model_path = base_model_path
 
     def setup_and_train(self):
         # Konfiguracja sieci
@@ -102,6 +112,29 @@ class SACPokerTrainer(BasePokerTrainer):
             n_step_return_horizon=3,
         )
 
+        if self.training_phase == 2:
+            if not self.base_model_path and not self.resume_path:
+                raise ValueError("Faza 2 wymaga podania --base-model (np. step_000750000.pth z Fazy 1).")
+            
+            if self.base_model_path and not self.resume_path:
+                print(f"Ładowanie modelu bazowego z {self.base_model_path}...")
+                base_state = torch.load(self.base_model_path, map_location=self.device, weights_only=True)
+                
+                if "algorithm_state" not in base_state:
+                    policy_learner.load_state_dict(base_state)
+                else:
+                    algo_state = base_state["algorithm_state"]
+                    if "_optimizers" in algo_state:
+                        del algo_state["_optimizers"]
+                    sac_learner.load_state_dict(algo_state, strict=False)
+
+                actor_weights = extract_actor_weights(policy_learner.state_dict())
+                self.train_envs.set_env_attr("latest_model_weights", actor_weights)
+                self.train_envs.set_env_attr("new_historical_model_weights", actor_weights)
+                self.test_envs.set_env_attr("latest_model_weights", actor_weights)
+                self.test_envs.set_env_attr("new_historical_model_weights", actor_weights)
+                print("Rozesłano model bazowy do przeciwników w środowiskach.")
+
         if resume_payload is not None:
             if "algorithm_state" in resume_payload:
                 if resume_payload.get("step_unit") != "learner_decisions":
@@ -109,15 +142,17 @@ class SACPokerTrainer(BasePokerTrainer):
                 sac_learner.load_state_dict(resume_payload["algorithm_state"])
                 self.starting_step = int(resume_payload["completed_env_steps"])
                 self.best_validation_score = float(resume_payload.get("best_validation_score", float("-inf")))
+
+                if self.training_phase == 2:
+                    actor_weights = extract_actor_weights(sac_learner.policy.state_dict())
+                    self.train_envs.set_env_attr("latest_model_weights", actor_weights)
+                    self.test_envs.set_env_attr("latest_model_weights", actor_weights)
             else:
                 self.starting_step = int(self.requested_start_step)
 
             interval = self.evaluation_interval_steps
             self.next_evaluation_step = (self.starting_step // interval + 1) * interval
             print(f"Wznowiono SAC od kroku {self.starting_step:,} z '{self.resume_path}'.")
-
-        if self.training_phase != 1:
-            raise NotImplementedError(f"Na razie obsługiwana jest tylko faza 1 dla SAC. Otrzymano: {self.training_phase}")
 
         # Kolektory
         buffer = VectorReplayBuffer(config.SAC_BUFFER_SIZE, len(self.train_envs))
@@ -157,6 +192,20 @@ class SACPokerTrainer(BasePokerTrainer):
             ensure_finite_model(critic2, global_step)
 
             evaluation_due = global_step >= self.next_evaluation_step
+
+            if self.training_phase == 2:
+                # Co ewaluację aktualizujemy "Latest Self"
+                if evaluation_due:
+                    actor_weights = extract_actor_weights(sac_learner.policy.state_dict())
+                    self.train_envs.set_env_attr("latest_model_weights", actor_weights)
+                    self.test_envs.set_env_attr("latest_model_weights", actor_weights)
+                
+                # Co pełny zapis stanu dodajemy model do "Historical Self"
+                if global_step > 0 and global_step % config.SAC_FULL_STATE_INTERVAL_DECISIONS == 0:
+                    actor_weights = extract_actor_weights(sac_learner.policy.state_dict())
+                    self.train_envs.set_env_attr("new_historical_model_weights", actor_weights)
+                    self.test_envs.set_env_attr("new_historical_model_weights", actor_weights)
+
             if evaluation_due:
                 save_training_state(
                     sac_learner,
@@ -265,6 +314,12 @@ def parse_args() -> argparse.Namespace:
         "--evaluation-interval", type=int, default=config.SAC_EVAL_INTERVAL_DECISIONS,
         help="Odstęp pomiędzy pełnymi walidacjami, liczony w decyzjach SAC."
     )
+    parser.add_argument(
+        "--base-model",
+        type=Path,
+        help="Ścieżka do najlepszego modelu z Fazy 1 (wymagane w Fazie 2)."
+    )
+
     args = parser.parse_args()
     
     if args.actions <= 0 or args.actions % config.SAC_STEPS_PER_EPOCH != 0:
@@ -281,20 +336,18 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    if config.TRAINING_PHASE != 1:
-        raise ValueError("Ten skrypt wymaga TRAINING_PHASE = 1")
-        
+
     configure_cpu_runtime()
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     checkpoint_dir = sac_run_dir(args.run_name)
     
     train_env_factories = [
-        partial(make_learner_env, args.seed + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + worker_index * 1_000_000, algo_name="sac")
         for worker_index in range(config.SAC_NUM_TRAIN_ENVS)
     ]
     test_env_factories = [
-        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000)
+        partial(make_learner_env, args.seed + 100_000_000 + worker_index * 1_000_000, algo_name="sac")
         for worker_index in range(config.SAC_NUM_TEST_ENVS)
     ]
     
@@ -326,5 +379,6 @@ if __name__ == "__main__":
             resume_path=args.resume,
             start_step=args.start_step,
             run_name=args.run_name,
+            base_model_path=args.base_model
         )
         trainer.setup_and_train()
