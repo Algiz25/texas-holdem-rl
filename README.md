@@ -1,181 +1,150 @@
-# Texas Hold'em RL
+# Texas Hold'em Reinforcement Learning
 
-Projekt środowiska turniejowego Texas Hold'em oraz agentów reinforcement learning opartych na DQN i PPO.
+Niniejsze repozytorium zawiera projekt końcowy zrealizowany w ramach inicjatywy **Wakacyjne Wyzwanie 2026**, organizowanej przez **Koło Naukowe Solvro** z **Politechniki Wrocławskiej**.
 
-## Instalacja
+Projekt stanowi kompleksowe środowisko turniejowe No-Limit Texas Hold'em zintegrowane z systemem do trenowania zaawansowanych agentów opartych na uczeniu ze wzmocnieniem (Reinforcement Learning). Architektura została zbudowana z wykorzystaniem bibliotek PyTorch oraz Tianshou, natomiast logika pokera i interfejs środowiska opierają się na silnikach RLCard, PettingZoo oraz standardzie Gymnasium.
 
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+System obsługuje cztery algorytmy RL (DQN, PPO, SAC, IQN) oraz przeprowadza trening w dwóch niezależnych fazach: uczenie podstaw gry przeciwko botom heurystycznym (Faza 1) oraz zaawansowany Self-Play (Faza 2).
 
-## Struktura
+## Spis treści
+1. [Architektura Systemu](#architektura-systemu)
+2. [Przestrzeń Obserwacji i Akcji](#przestrzeń-obserwacji-i-akcji)
+3. [Trening Modelu](#trening-modelu)
+4. [Ewaluacja](#ewaluacja)
+5. [Generator Powtórek i Interfejs UI](#generator-powtórek-i-interfejs-ui)
+6. [Osiągnięte Wyniki](#osiągnięte-wyniki)
+7. [Struktura Projektu](#struktura-projektu)
 
-```text
-checkpoints/                lokalne checkpointy modeli i raporty ewaluacji
-logs/                       lokalne logi TensorBoard i terminala
-scripts/
-  run_overnight_dqn.sh      jeden długi, bezpiecznie zatrzymywany trening
-src/
-  config.py                 parametry środowiska, treningu i ewaluacji
-  environment.py            środowisko PettingZoo/RLCard
-  models.py                 sieci Actor i Critic
-  opponents.py              losowi, heurystyczni i zamrożeni przeciwnicy
-  training/
-    base_trainer.py         wspólna logika treningu
-    dqn_environment.py      jednoagentowy widok decyzji DQN
-    train_dqn.py            trening DQN
-    train_ppo.py            trening PPO
-  evaluation/
-    evaluator.py            wspólna logika ewaluacji
-    evaluator_dqn.py        ewaluacja DQN
-    evaluator_ppo.py        ewaluacja PPO
-tests/                      testy środowiska i modeli
-```
+## Architektura Systemu
 
-## Trening
+System integruje kilka warstw abstrakcji, aby zapewnić stabilny trening algorytmów RL w środowisku o ukrytej informacji:
 
-Parametry środowiska, DQN i PPO zmienia się w `src/config.py`.
+- **Baza pokera (RLCard):** Odpowiada za mechanikę gry, tasowanie kart, ewaluację rąk (showdown) i pule.
+- **Wieloagentowe środowisko (PettingZoo):** Klasa `TexasHoldemTournament` realizuje cykl AEC (Agent-Environment-Cycle). Śledzi statystyki VPIP/PFR, oblicza pulę, zarządza bankructwami oraz przyznaje nagrody za zajęte miejsca w turnieju.
+- **Nakładka Jednoagentowa (Gymnasium):** Kluczowy element treningowy. Ukrywa przed agentem wieloagentową naturę środowiska. Oblicza ruchy stołu w tle i zwraca sterowanie do algorytmu RL (Tianshou) tylko w momencie, gdy uczeń (learner) musi podjąć decyzję. Zapewnia to prawidłową strukturę próbek w buforze pamięci (Replay Buffer).
+- **Silnik Uczenia ze Wzmocnieniem (Tianshou):** Stanowi główny framework RL orkiestrujący cały proces treningowy. Odpowiada za zarządzanie pamięcią doświadczeń (Replay Buffer), wydajne i równoległe zbieranie danych z wielu środowisk (Collectors) oraz kontrolowanie głównych pętli uczących (Trainers). Tianshou dostarcza zoptymalizowane implementacje algorytmów takich jak DQN, PPO, SAC czy IQN, pełniąc rolę pomostu, który płynnie łączy sieci neuronowe zdefiniowane w PyTorch ze zintegrowanym środowiskiem zgodnym ze standardem Gymnasium.
+  <img width="1326" height="798" alt="image" src="https://github.com/user-attachments/assets/839e79a6-1d31-46bf-bbac-576399fbfa18" />
 
-Pierwsza faza DQN jest skonfigurowana pod lokalny trening na MacBooku Air M2:
+- **Sieci Neuronowe:** Dwugałęziowa architektura (Dual-Branch). Pierwsza gałąź przetwarza 104 cechy kart (one-hot), a druga gałąź pozostałe metadane (stacki, statystyki, oddsy). Cechy są łączone w warstwach decyzyjnych Actory i Critica.
+<img width="1624" height="913" alt="image" src="https://github.com/user-attachments/assets/b330a7a8-fcb4-4fb4-98ae-493b2b3efdef" />
 
-- 250 000 decyzji DQN (25 epok po 10 000 decyzji), co odpowiada w przybliżeniu
-  dawnemu milionowi ruchów całego czteroosobowego stołu,
-- dodatkowe 25 000 legalnych decyzji rozgrzewających replay buffer,
-- 8 równoległych procesów treningowych, 1 proces krótkiego testu technicznego
-  i 1 wątek obliczeniowy PyTorch,
-- przeciwnicy losowani na turniej w proporcji 50% Random, 40% Check/Call,
-  10% Mixed,
-- epsilon malejący z 1.0 do 0.1 przez 180 000 decyzji ucznia,
-- jedna aktualizacja gradientu na cztery nowe decyzje (`update ratio = 0.25`).
+## Przestrzeń Obserwacji i Akcji
 
-Trening DQN korzysta z jednoagentowej nakładki. Po akcji ucznia środowisko
-samodzielnie rozgrywa ruchy botów i zwraca sterowanie dopiero przy kolejnej
-decyzji ucznia. Dzięki temu replay buffer nigdy nie łączy akcji `player_0` z
-prywatną obserwacją następnego przeciwnika. Jeden krok DQN oznacza teraz jedną
-decyzję ucznia, a nie jeden dowolny ruch przy stole.
+### Przestrzeń Akcji (Discrete 5)
+Każdy algorytm porusza się w stałej przestrzeni 5 dyskretnych akcji. System dynamicznie maskuje niedozwolone akcje (np. brak możliwości czekania przy przebiciu).
+0. Fold
+1. Check / Call (wybór zależy od tego, czy koszt sprawdzenia wynosi 0)
+2. Raise Half Pot (podbicie o połowę aktualnej puli)
+3. Raise Pot (podbicie o pełną pulę)
+4. All-in
 
-Pełna walidacja DQN odbywa się co 25 000 decyzji na czterech zestawach
-przeciwników. Pojedynczy mecz trwa do końca turnieju albo do 100 rozdań, więc
-główna metryka `bb/100` nie zależy od tego, jak długo pasywni gracze utrzymują
-się przy stole. Po zakończeniu najlepszy i ostatni model rozgrywają po 200
-meczów przeciwko każdemu zestawowi. Cztery zestawy są liczone równolegle w
-osobnych procesach.
+### Przestrzeń Obserwacji (222 cechy)
+Agent ma dostęp do bogatego wektora stanu gry, który naśladuje informacje dostępne dla ludzkiego gracza:
+- **Karty (0-103):** 52 karty prywatne + 52 karty wspólne (zakodowane jako one-hot).
+- **Stan finansowy (104-115):** Znormalizowane stacki, wkłady na ulicy oraz wkłady w całym rozdaniu.
+- **Statusy (116-135):** Flagi aktywności, pasów, all-inów, pozycja buttona i aktualna faza licytacji (preflop, flop, turn, river).
+- **Historia Akcji (138-185):** Poprzednie ruchy każdego gracza oraz statystyki z poprzednich ulic (liczba przebić i sprawdzeń).
+- **Statystyki Przeciwników (186-203):** VPIP, PFR, wskaźnik agresji, Fold to Raise oraz Showdown Win Rate dla każdego z 3 przeciwników.
+- **Cechy Zaawansowane (204-221):** Pot odds, kategoria aktualnej ręki (np. para, strit), wykryte drawy (open-ended, gutshot, flush draw) oraz tekstura stołu.
+<img width="984" height="658" alt="image" src="https://github.com/user-attachments/assets/904e2062-231d-4296-a7d0-968e48556478" />
 
-Osiem środowisk celowo wykorzystuje wszystkie rdzenie komputera. Podczas
-treningu system może reagować wolno, dlatego najlepiej nie wykonywać w tym
-czasie innych obciążających zadań.
+## Funkcja Nagrody
 
-Silnik RLCard jest ponownie wykorzystywany pomiędzy rozdaniami i tworzony od
-nowa dopiero po zmianie liczby aktywnych graczy. Nie zmienia to zasad gry ani
-obserwacji, a usuwa koszt konstruowania oraz seedowania całego silnika przy
-każdej kolejnej ręce.
+System wykorzystuje hybrydową funkcję nagrody, łączącą gęste sygnały (dense rewards) po każdym rozdaniu z rzadkimi sygnałami (sparse rewards) na koniec gry. Zachęca to agenta zarówno do optymalizacji pojedynczych rozdań, jak i do walki o przetrwanie i wygranie całego turnieju.
 
-```bash
-PYTHONPATH=src .venv/bin/python src/training/train_dqn.py
-PYTHONPATH=src .venv/bin/python src/training/train_ppo.py
-```
+Nagroda dla agenta składa się z dwóch elementów:
 
-Każdy trening DQN otrzymuje nazwę i seed. Nazwa oddziela jego modele, raporty
-ewaluacji oraz wykresy od pozostałych eksperymentów. Przykład pojedynczego
-runu:
+1. **Nagroda za rozdanie (Znormalizowany Payoff):** 
+   Po każdym zakończonym rozdaniu agent otrzymuje nagrodę równą liczbie wygranych (lub przegranych) żetonów, podzieloną przez wartość początkowego stacka (`STARTING_CHIPS = 200`). Dzięki temu agent ma natychmiastowy feedback (np. wygrana puli wielkości 100 żetonów daje nagrodę `+0.5`, a strata wpisowego blinda `-0.01`).
+
+2. **Nagroda za pozycję w turnieju (Placement Reward):** 
+   Kiedy gracz bankrutuje (lub wygrywa stół), otrzymuje dodatkową nagrodę za zajęte miejsce. Została ona zaprojektowana w oparciu o wzór `(2.5 - pozycja) * 2.0`, co faworyzuje przetrwanie i agresywną grę o pierwsze miejsce, wprowadzając następujące wartości:
+   - **1. miejsce:** `+3.0`
+   - **2. miejsce:** `+1.0`
+   - **3. miejsce:** `-1.0`
+   - **4. miejsce:** `-3.0`
+
+W przypadku jednoczesnej eliminacji kilku graczy w tym samym rozdaniu, otrzymują oni średnią z miejsc ex aequo (np. obaj odpadający na 3. i 4. miejscu zajmują pozycję 3.5, co daje karę `-2.0`).
+<img width="1624" height="913" alt="image" src="https://github.com/user-attachments/assets/605336a1-ee99-46e1-aae7-293b76cdf3f7" />
+
+
+## Trening Modelu
+
+Wszystkie parametry (rozmiary buforów, współczynniki uczenia, częstotliwości zapisu) znajdują się w pliku `src/config.py`. System używa biblioteki Tianshou do orkiestracji treningu.
+
+Z poziomu terminala można uruchomić jeden z czterech obsługiwanych algorytmów:
 
 ```bash
-PYTHONPATH=src .venv/bin/python src/training/train_dqn.py \
-  --run-name baseline_seed_11001 \
-  --seed 11001
+PYTHONPATH=src python src/training/train_dqn.py --run-name dqn_phase1 --seed 11001
+PYTHONPATH=src python src/training/train_ppo.py --run-name ppo_phase1 --seed 11002
+PYTHONPATH=src python src/training/train_sac.py --run-name sac_phase1 --seed 11003
+PYTHONPATH=src python src/training/train_iqn.py --run-name iqn_phase1 --seed 11004
 ```
 
-Nowy trening DQN zapisuje także `training_state_latest.pth` i
-`training_state_final.pth`. Zawierają wagi, sieć docelową, optymalizator oraz
-liczniki potrzebne do kontynuacji. Replay buffer nie jest zapisywany, dlatego
-po wznowieniu skrypt ponownie zbiera 25 000 decyzji rozgrzewkowych.
+### Fazy treningu
+- **Faza 1:** Rozgrzewka. Agent uczy się grać przeciwko mieszance prostych, algorytmicznych botów (Random, Passive, Mixed, Aggressive).
+- **Faza 2:** Self-Play. Przejście na grę przeciwko własnym historycznym wagom (`historical_self`) oraz najnowszej polityce (`latest_self`). Trening ten ma na celu aproksymację równowagi Nasha (GTO). Przejście do tej fazy wymaga podania w parametrach ścieżki do modelu bazowego z Fazy 1.
+<img width="1904" height="1065" alt="image" src="https://github.com/user-attachments/assets/e7ff8615-6112-4558-ab8e-508f73b8550f" />
 
-Kontynuacja o kolejne 250 000 decyzji z nowego stanu treningowego:
 
+
+### Treningi nocne
+W folderze `scripts/` znajdują się skrypty `.sh` i `.ps1` stworzone z myślą o wielomilionowych treningach trwających kilkanaście godzin. Zapewniają one regularne zapisywanie stanu `training_state_latest.pth` i pozwalają na przerwanie treningu standardowym sygnałem przerwania (Ctrl+C), po którym następuje bezpieczny zapis wszystkich wag. Parametry skryptów zostały zoptymalizowane pod kątem maksymalnego wykorzystania naszych stacji roboczych. W przypadku uruchamiania treningu na innym sprzęcie, może być konieczne zmniejszenie liczby równoległych środowisk (np. NUM_TRAIN_ENVS) lub innych parametrów specyficznych dla algorytmów (np. <algorytm>_BATCH_SIZE) w pliku config.py, aby uniknąć przeciążenia systemu.
+
+Wgląd w metryki treningowe odbywa się przez TensorBoard:
 ```bash
-PYTHONPATH=src .venv/bin/python src/training/train_dqn.py \
-  --run-name baseline_seed_11001 \
-  --seed 11001 \
-  --resume checkpoints/dqn/baseline_seed_11001/training_state_final.pth \
-  --decisions 250000
+tensorboard --logdir logs/
 ```
-
-Stany zapisane przez dawny wieloagentowy kolektor są celowo odrzucane, bo
-zawierają model uczony na przejściach pomiędzy perspektywami różnych graczy.
-Pierwszy trening po tej poprawce należy rozpocząć od zera. Stare checkpointy
-można zachować wyłącznie jako materiał porównawczy w ewaluacji.
-
-Skrypt blokuje równoczesne uruchomienie drugiego treningu DQN w tym samym
-katalogu projektu.
-
-Checkpointy każdego DQN są zapisywane w osobnym katalogu:
-
-```text
-checkpoints/dqn/<run-name>/best.pth
-checkpoints/dqn/<run-name>/latest.pth
-checkpoints/dqn/<run-name>/final.pth
-checkpoints/dqn/<run-name>/training_state_step_000100000.pth
-checkpoints/dqn/<run-name>/training_state_step_000200000.pth
-checkpoints/dqn/<run-name>/training_state_final.pth
-checkpoints/ppo/best.pth
-checkpoints/ppo/final.pth
-```
-
-Pliki `training_state_step_*` zachowują pełny stan DQN co 100 000 decyzji
-(10 epok). Można ich użyć do wznowienia albo jako punktu startowego kolejnej
-fazy. Pliki `step_*`, `best.pth`, `latest.pth` i `final.pth` zawierają wagi
-przeznaczone do porównywania modeli. Replay buffer nie jest zapisywany.
-
-## Trening nocny DQN
-
-Skrypt nocny prowadzi jeden ciągły trening `overnight_long_seed_11001`. Dzięki
-temu ten sam model oraz replay buffer rozwijają się przez całą noc, zamiast
-kilka razy zaczynać od zera. Limit 100 milionów decyzji jest wyłącznie
-zabezpieczeniem technicznym — po około dziewięciu godzinach trening należy
-zatrzymać ręcznie.
-
-Długi run korzysta z harmonogramu epsilon `1.0 → 0.1` przez pierwsze 700 000
-decyzji i wykonuje pełną ewaluację co 250 000 decyzji. Ogranicza to czas
-poświęcony na testy, ale pozostawia regularne, porównywalne punkty kontrolne.
-
-Przed startem skrypt uruchamia testy. Sam włącza też `caffeinate`, więc macOS
-nie uśpi komputera ani nie wygasi ekranu do końca pracy. Należy pozostawić
-MacBooka podłączonego do zasilania i uruchomić:
-
-```bash
-./scripts/run_overnight_dqn.sh
-```
-
-Rano należy przejść do terminala z treningiem i jeden raz nacisnąć `Ctrl+C`.
-Skrypt przechwytuje przerwanie, zapisuje `interrupted.pth`, aktualizuje
-`latest.pth` oraz tworzy pełny `training_state_latest.pth`. Celowo nie uruchamia
-wtedy długiej ewaluacji końcowej, aby komputer został zwolniony od razu.
-
-Jeżeli trening ma być kontynuowany kolejnej nocy, ponowne wykonanie tej samej
-komendy wznawia model od `training_state_latest.pth`. Ponieważ replay buffer
-nie jest częścią stanu, przed dalszym uczeniem ponownie wykonywany jest warm-up
-25 000 decyzji.
-
-Postęp, loss, epsilon i wyniki pokerowe można oglądać w TensorBoard:
-
-```bash
-.venv/bin/tensorboard --logdir logs/dqn
-```
-
-Następnie należy otworzyć `http://localhost:6006`. Surowy zapis terminala z
-każdego modelu trafia do `logs/dqn/overnight_<data>/`.
 
 ## Ewaluacja
 
+Mechanizm walidacyjny wyodrębniono do osobnych procesów. Końcowy raport nie zależy od funkcji uczących, a wskaźniki (np. `bb/100`) są wiarygodne, ponieważ sprawdzane były na wyizolowanych seedach.
+Walidacja odbywa się podczas treningu w zależności od parametrów w `config.py`.
+
+Raporty generują pliki szczegółowe JSON oraz plik zbiorczy `evaluations_v2.csv` wewnątrz folderu `checkpoints/<algorytm>/evaluations` oraz zapisują wagi modelu testowanego w `checkpoints/<algorytm>`.
+
+## Generator Powtórek i Interfejs UI
+
+Wizualna analiza wyuczonych modeli możliwa jest dzięki lokalnej aplikacji napisanej w Streamlit. Umożliwia ona rozegranie pokazowego turnieju pomiędzy dowolnymi algorytmami lub heurystykami.
+
+1. **Konfiguracja stołu:** W pliku `src/app/app_config.py` zdefiniuj, kto usiądzie przy stole (np. DQN przeciwko PPO, SAC i botowi mieszanemu).
+2. **Generacja historii:**
 ```bash
-PYTHONPATH=src python src/evaluation/evaluator_dqn.py
-PYTHONPATH=src python src/evaluation/evaluator_ppo.py
+PYTHONPATH=src python src/app/replay_generator.py
 ```
-
-## Testy
-
+3. **Uruchomienie stołu graficznego:**
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests
+PYTHONPATH=src streamlit run src/app/poker_ui.py
+```
+Aplikacja otwiera się w przeglądarce, odtwarza klatka po klatce wygenerowany plik JSON (animacje lotu żetonów, ukryte i odkryte karty, powiadomienia o akcjach).
+<img width="1883" height="928" alt="image" src="https://github.com/user-attachments/assets/f0e555f9-2c1a-435f-994e-a1bec62ede01" />
+
+## Osiągnięte Wyniki
+
+Najlepsze wyuczone wagi modeli z poszczególnych eksperymentów zostały zarchiwizowane i znajdują się w podkatalogach `checkpoints/<algorytm>/REAL_BEST`. 
+
+Poniżej przedstawiono wyniki ewaluacji poszczególnych algorytmów. Główną metryką oceniającą siłę agenta w pojedynczych rozdaniach jest zysk wyrażony w wielkich ciemnych na 100 rozdań (`bb/100`), natomiast `Win Rate` określa procent wygranych całych turniejów w danym zestawie walidacyjnym.
+
+Dalszy trening DQN w Fazie 2 (Self-Play) nie przyniósł oczekiwanych rezultatów (brak poprawy względem polityki bazowej), dlatego głównym i docelowym modelem DQN pozostaje wersja z Fazy 1.
+
+Cross-ewaluacja odbywała się na przestrzeni 1000 turniejów. Każdy algorytm zagrał 250 razy na każdym miejscu przy stole.
+<img width="1624" height="913" alt="image" src="https://github.com/user-attachments/assets/8c39806e-1e5d-45a9-8a76-9ac96505ef20" />
+
+
+## Struktura Projektu
+
+```text
+├── checkpoints/                - Automatycznie tworzone; tutaj trafiają wagi modeli (.pth) oraz raporty z ewaluacji (.csv/.json).
+├── logs/                       - Eventy TensorBoard.
+├── scripts/                    - Skrypty .sh i .ps1 do ciągłych, długich treningów (Faza 1 i Faza 2).
+├── src/
+│   ├── app/                    - Logika generatora powtórek i webowe UI wizualizujące rozgrywkę (Streamlit).
+│   ├── evaluation/             - Niezależne skrypty weryfikujące siłę gry (bb/100, win rate) w wieloprocesowych środowiskach.
+│   ├── observation/            - Kod transformacji gry do wektora obserwacji, inżynieria cech (karty, pot odds, historia).
+│   ├── training/               - Logika pętli treningowych dla algorytmów Tianshou (base_trainer, dqn, ppo, sac, iqn).
+│   ├── config.py               - Główne hiperparametry hiperparametry algorytmów, bufory, epsilony i konfiguracje środowiska.
+│   ├── environment.py          - Główne środowisko gry Texas Hold'em (PettingZoo + RLCard).
+│   ├── models.py               - Architektura sieci neuronowych PyTorch (MaskedActor, Critic).
+│   └── paths.py                - Zunifikowane ścieżki do plików.
+└── tests/                      - Testy jednostkowe potwierdzające integralność mechaniki gry i tensorów.
 ```
