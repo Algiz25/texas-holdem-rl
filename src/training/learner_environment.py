@@ -20,9 +20,11 @@ from collections.abc import Mapping
 
 import gymnasium as gym
 import numpy as np
+import torch
 
 import config
 from environment import TexasHoldemTournament
+from models import MaskedActor
 
 
 # Korzystamy z tego samego rozkładu co ewaluator. Przeciwnik Mixed nie może
@@ -60,16 +62,19 @@ class PokerLearnerEnv(gym.Env):
         if learner not in self.poker_env.possible_agents:
             raise ValueError(f"Nieznany uczący się gracz: {learner!r}")
 
-        weights = dict(opponent_weights or config.PHASE1_OPPONENT_WEIGHTS)
-        supported = {"random", "passive", "mixed"}
+        if config.TRAINING_PHASE == 1:
+            weights = dict(opponent_weights or config.PHASE1_OPPONENT_WEIGHTS)
+            supported = {"random", "passive", "mixed"}
+        elif config.TRAINING_PHASE == 2:
+            weights = dict(opponent_weights or config.PHASE2_OPPONENT_WEIGHTS)
+            supported = {"historical_self", "latest_self", "mixed", "passive"}
+        else:
+            raise ValueError(f"Nieobsługiwana faza: {config.TRAINING_PHASE}")
+
         if set(weights) != supported:
-            raise ValueError(
-                "Faza 1 wymaga dokładnie wag: random, passive i mixed"
-            )
-        if any(value < 0 for value in weights.values()) or not np.isclose(
-            sum(weights.values()),
-            1.0,
-        ):
+            raise ValueError(f"Faza {config.TRAINING_PHASE} wymaga dokładnie wag: {supported}")
+        
+        if any(value < 0 for value in weights.values()) or not np.isclose(sum(weights.values()), 1.0):
             raise ValueError("Wagi przeciwników muszą być nieujemne i sumować się do 1")
 
         self._opponent_names = tuple(weights)
@@ -83,6 +88,11 @@ class PokerLearnerEnv(gym.Env):
         self.opponent_styles: dict[str, str] = {}
         self.total_table_actions = 0
 
+        # Pamięć dla modeli Self-Play ---
+        self.latest_model: MaskedActor | None = None
+        self.historical_models: list[MaskedActor] = []
+        self.max_historical = getattr(config, "PHASE2_MAX_HISTORICAL_MODELS", 100)
+
         # Tianshou rozpoznaje maskowanie akcji po nazwach ``obs`` i ``mask``.
         # Wektor pozostaje dokładnie tym samym 222-elementowym wektorem, który
         # zwraca środowisko pokerowe; zmienia się tylko nazwa pól adaptera.
@@ -93,6 +103,52 @@ class PokerLearnerEnv(gym.Env):
             }
         )
         self.action_space = gym.spaces.Discrete(config.ACTION_SPACE)
+
+    # --- METODY DLA SELF-PLAY ---
+    @property
+    def latest_model_weights(self) -> dict | None:
+        return None
+
+    @latest_model_weights.setter
+    def latest_model_weights(self, actor_state_dict: dict) -> None:
+        """Aktualizuje wagi przeciwnika 'latest_self' poprzez przypisanie atrybutu."""
+        if self.latest_model is None:
+            self.latest_model = MaskedActor().to("cpu")
+            self.latest_model.eval()
+        self.latest_model.load_state_dict(actor_state_dict)
+
+    @property
+    def new_historical_model_weights(self) -> dict | None:
+        return None
+
+    @new_historical_model_weights.setter
+    def new_historical_model_weights(self, actor_state_dict: dict) -> None:
+        """Dodaje nowy model do puli 'historical_self' poprzez przypisanie atrybutu."""
+        model = MaskedActor().to("cpu")
+        model.load_state_dict(actor_state_dict)
+        model.eval()
+        
+        self.historical_models.append(model)
+        if len(self.historical_models) > self.max_historical:
+            # Losowo usuwamy jeden ze starszych modeli, aby utrzymać limit
+            idx_to_remove = self._rng.integers(len(self.historical_models))
+            self.historical_models.pop(idx_to_remove)
+
+    def _get_nn_action(self, model: MaskedActor, obs: np.ndarray, mask: np.ndarray) -> int:
+        """Pobiera akcję z sieci neuronowej zachowując stochastyczność (sampling)."""
+        with torch.no_grad():
+            obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
+            mask_tensor = torch.as_tensor(mask, dtype=torch.bool).unsqueeze(0)
+            
+            logits, _ = model(obs_tensor)
+            # Maskowanie niedozwolonych akcji
+            logits = torch.where(mask_tensor, logits, torch.tensor(-1e9))
+            
+            # W self-play chcemy zachować eksplorację, więc próbkujemy z rozkładu (jak w PPO)
+            dist = torch.distributions.Categorical(logits=logits)
+            action = dist.sample().item()
+            
+        return int(action)
 
     def reset(
         self,
@@ -196,6 +252,7 @@ class PokerLearnerEnv(gym.Env):
             observation = self.poker_env.observe(selected)
             opponent_action = self._choose_opponent_action(
                 selected,
+                observation["observation"],
                 observation["action_mask"],
             )
             learner_reward += self._step_underlying(opponent_action)
@@ -212,13 +269,35 @@ class PokerLearnerEnv(gym.Env):
         # wyczyści, i przypisujemy do decyzji ucznia rozpoczynającej ten odcinek.
         return float(self.poker_env.rewards.get(self.learner, 0.0))
 
-    def _choose_opponent_action(self, agent: str, mask: np.ndarray) -> int:
+    def _choose_opponent_action(self, agent: str,obs: np.ndarray, mask: np.ndarray) -> int:
         """Wybierz legalny ruch zgodnie ze stałą osobowością przeciwnika."""
         legal_actions = np.flatnonzero(mask)
         if not len(legal_actions):
             raise RuntimeError(f"Aktywny przeciwnik {agent} nie ma legalnej akcji")
 
         style = self.opponent_styles[agent]
+
+        # --- Obsługa sieci neuronowych ---
+        if style == "latest_self":
+            if self.latest_model is None:
+                raise RuntimeError(
+                    "Środowisko zażądało akcji od 'latest_self', ale model nie został "
+                    "jeszcze załadowany. Upewnij się, że trener rozesłał wagi "
+                    "przed rozpoczęciem zbierania danych (env_method)."
+                )
+            return self._get_nn_action(self.latest_model, obs, mask)
+            
+        if style == "historical_self":
+            if not self.historical_models:
+                raise RuntimeError(
+                    "Pula 'historical_self' jest pusta. Środowisko nie może wylosować "
+                    "historycznego przeciwnika."
+                )
+            # Losujemy jeden z modeli historycznych
+            idx = self._rng.integers(len(self.historical_models))
+            return self._get_nn_action(self.historical_models[idx], obs, mask)
+        # -----------------------------------------
+
         if style == "passive":
             # Check/call zachowuje pasywny charakter i jest preferowany zawsze,
             # gdy silnik pokera dopuszcza tę akcję.

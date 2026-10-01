@@ -11,7 +11,10 @@ import config
 class PPOEvaluator(BasePokerEvaluator):
     algorithm_name = "ppo"
 
-    def load_policy(self):
+    def load_policy(self, path=None):
+        if path is None:
+            path = self.model_path
+
         actor = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(self.device)
 
         def dist_fn(logits):
@@ -29,7 +32,7 @@ class PPOEvaluator(BasePokerEvaluator):
         )
         
         try:
-            policy.load_state_dict(torch.load(self.model_path, map_location=self.device, weights_only=True))
+            policy.load_state_dict(torch.load(path, map_location=self.device, weights_only=True))
             print(f"Załadowano model PPO: {self.model_path}")
             policy.eval()
             return policy
@@ -46,6 +49,6 @@ class PPOEvaluator(BasePokerEvaluator):
 if __name__ == "__main__":
     ppo_eval = PPOEvaluator(
         num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
-        model_path=PPO_CHECKPOINT_DIR / "best.pth",
+        model_path=PPO_CHECKPOINT_DIR / "phase2_selfplay_seed_11001" / "final.pth",
     )
     ppo_eval.evaluate()
