@@ -1,6 +1,8 @@
 """Wspólna infrastruktura treningu oraz harmonogram rzetelnej ewaluacji."""
-
 from __future__ import annotations
+import os
+from contextlib import contextmanager
+from pathlib import Path
 
 import shutil
 from datetime import datetime
@@ -11,6 +13,89 @@ from tianshou.env import PettingZooEnv, SubprocVectorEnv
 import config
 from environment import TexasHoldemTournament
 from paths import DQN_CHECKPOINT_DIR, PPO_CHECKPOINT_DIR, ensure_output_directories
+
+def configure_cpu_runtime() -> None:
+    """Zapobiega przeciążeniu procesora przy wielu środowiskach."""
+    torch.set_num_threads(config.TORCH_NUM_THREADS)
+    torch.set_num_interop_threads(config.TORCH_NUM_INTEROP_THREADS)
+
+def ensure_finite_model(model: torch.nn.Module, env_step: int) -> None:
+    """Przerwij trening od razu, gdy wagi zawierają NaN albo nieskończoność."""
+    invalid_parameters = [
+        name
+        for name, parameter in model.named_parameters()
+        if not torch.isfinite(parameter).all()
+    ]
+    if invalid_parameters:
+        names = ", ".join(invalid_parameters)
+        raise FloatingPointError(
+            f"Niestabilny model po {env_step:,} decyzjach ucznia; "
+            f"niepoprawne parametry: {names}"
+        )
+
+@contextmanager
+def single_training_process(checkpoint_dir: Path):
+    """Nie pozwól przypadkowo uruchomić dwóch treningów w tym samym katalogu."""
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = checkpoint_dir / "training.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as error:
+            raise RuntimeError(
+                "Inny trening już działa w tym katalogu. Nie uruchamiaj drugiego procesu."
+            ) from error
+        
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(f"pid={os.getpid()}\n")
+        lock_file.flush()
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+def save_training_state(
+    algorithm,
+    env_step: int,
+    path: Path,
+    *,
+    best_validation_score: float,
+    **kwargs
+) -> None:
+    """Zapisz stan algorytmu potrzebny do bezpiecznej kontynuacji treningu."""
+    payload = {
+        "format_version": 3,
+        "step_unit": "learner_decisions",
+        "algorithm_state": algorithm.state_dict(),
+        "completed_env_steps": env_step,
+        "best_validation_score": best_validation_score,
+        "observation_size": config.OBSERVATION_SIZE,
+        "action_space": config.ACTION_SPACE,
+    }
+    
+    # Zapisz iterację algorytmu, jeśli jest dostępna (np. w OffPolicyAlgorithm)
+    if hasattr(algorithm, "_iter"):
+        payload["algorithm_iteration"] = algorithm._iter
+        
+    # Dodaj wszelkie specyficzne dla algorytmu parametry (np. epsilon)
+    payload.update(kwargs)
+    
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary_path)
+    temporary_path.replace(path)
 
 
 def make_poker_env():

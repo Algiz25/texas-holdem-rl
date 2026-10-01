@@ -3,10 +3,13 @@ from observation.schema import OBSERVATION_SIZE
 
 # ZMIENNE ŚRODOWISKOWE
 # póki co jedyna dostępna faza to 1
-TRAINING_PHASE = 2
+TRAINING_PHASE = 1
 ACTION_SPACE = 5    # nie zmieniać
 STARTING_CHIPS = 200
 NUM_PLAYERS = 4     # nie zmieniać
+
+TORCH_NUM_THREADS = 1
+TORCH_NUM_INTEROP_THREADS = 1
 
 # Faza 1 losuje osobowość każdego z trzech przeciwników niezależnie na
 # początku turnieju. Brak wpisu "aggressive" jest celowy: na rozgrzewce model
@@ -61,72 +64,30 @@ EVAL_WORKER_TORCH_THREADS = 1
 BIG_BLIND = 2
 
 # ZMIENNE TRENINGOWE DQN
-DQN_LEARNING_RATE = 1e-4
+DQN_LEARNING_RATE = 5e-5
 DQN_GAMMA = 0.99
-DQN_TARGET_NET_UPDATE = 5000 # TODO: sprawdzić czy to dobra ilość
+DQN_TARGET_NET_UPDATE = 10000 # TODO: sprawdzić czy to dobra ilość
+DQN_HUBER_LOSS_DELTA = 1.0
 
 # epsilony
 DQN_EPS_MAX = 1.0
-DQN_RAND_PHASE_EPS_MIN = 0.1
-# Po przejściu na jednoagentowy kolektor jeden krok oznacza decyzję ucznia.
-# 180 tys. decyzji odpowiada w przybliżeniu dawnym 720 tys. ruchów całego
-# czteroosobowego stołu. Pozostałe 70 tys. decyzji utrzymuje epsilon 0.1.
-DQN_PHASE1_EPS_DECAY_STEPS = 180_000
-
-DQN_OTHER_PHASE_EPS_MIN = 0.02
-DQN_OTHER_PHASE_EPS_MAX = 0.2
-DQN_OTHER_PHASE_EPS_DECAY = 0.5
+DQN_PHASE1_EPS_MIN = 0.1
+DQN_PHASE1_EPS_TAU = 50_000 
 
 # bufor
 DQN_BUFFER_SIZE = 500_000
-DQN_BUFFER_WARMUP = 25_000
-
-# Dla macbooka
-# DQN_BATCH_SIZE = 64
-
-# Dla Borian komputer
-DQN_BATCH_SIZE = 256
-
-# Jedna aktualizacja gradientu przypada na cztery nowe decyzje ucznia.
-# Zmniejsza to wielokrotne trenowanie na tych samych rekordach i pozwala
-# zebrać więcej różnorodnych rozdań w ciągu jednej nocy.
-DQN_UPDATE_RATIO = 0.25
-
-# MacBook Air M2 ma cztery rdzenie wydajnościowe i cztery energooszczędne.
-# Osiem procesów środowiska dało najwyższą łączną przepustowość w benchmarku.
-# DQN_NUM_TRAIN_ENVS = 8
-
-# Dla Borian komputer
+DQN_BUFFER_WARMUP = 10_000
+DQN_BATCH_SIZE = 512
+DQN_UPDATE_RATIO = 0.5
 DQN_NUM_TRAIN_ENVS = 4
-# Test techniczny rozgrywa tylko jeden turniej, więc jeden proces testowy jest
-# wystarczający. Pozostałe siedem procesów przez większość treningu było
-# bezczynnych i jedynie zajmowało pamięć oraz zasoby systemowe.
 DQN_NUM_TEST_ENVS = 1
 
-# Mała sieć DQN z batchem 64 działa na tym komputerze szybciej na jednym
-# wątku CPU niż na wielu wątkach albo przez Apple MPS.
-TORCH_NUM_THREADS = 1
-TORCH_NUM_INTEROP_THREADS = 1
-
-# 250 tys. decyzji ucznia daje zbliżoną liczbę ruchów stołu do poprzedniego
-# eksperymentu liczącego milion akcji wszystkich czterech graczy. Dzięki temu
-# pierwszy poprawiony run można uczciwie porównać czasowo z poprzednim.
 DQN_MAX_EPOCHS = 25
 DQN_STEPS_PER_EPOCH = 10_000
-# Kolektor przeplata 1000 nowych decyzji ucznia z aktualizacjami sieci.
-# Wartość dzieli 10 000 bez reszty, więc nie powstają nadmiarowe kroki.
 DQN_COLLECTION_STEPS = 1_000
 
-# Walidacja co 25 tys. decyzji zachowuje dziesięć punktów kontrolnych podczas
-# fazy porównywalnej z dawnym milionem ruchów całego stołu.
-DQN_EVAL_INTERVAL_DECISIONS = 25_000
-
-# Oprócz nadpisywanego stanu awaryjnego zachowujemy pełny stan co 10 epok.
-# Te pliki zawierają również target network i optymalizator, dlatego mogą być
-# bezpiecznym początkiem kolejnej fazy albo wznowienia eksperymentu.
+DQN_EVAL_INTERVAL_DECISIONS = 50_000
 DQN_FULL_STATE_INTERVAL_DECISIONS = 100_000
-
-#TODO: WAŻNE jeśli trenowałbtś na macbooku to musisz tu pozmieniać rzeczy
 
 # ZMIENNE TRENINGOWE PPO
 if TRAINING_PHASE == 1:
@@ -166,6 +127,34 @@ PPO_REPEAT_PER_COLLECT = 4
 
 PPO_EVAL_INTERVAL_DECISIONS = 25_000
 PPO_FULL_STATE_INTERVAL_DECISIONS = 100_000
+
+
+# ZMIENNE TRENINGOWE SAC
+SAC_ACTOR_LR = 1e-4
+SAC_CRITIC_LR = 1e-4
+SAC_ALPHA_LR = 3e-4
+SAC_GAMMA = 0.99
+SAC_TAU = 0.005
+SAC_AUTO_ALPHA = True
+SAC_ALPHA = 0.05  # Używane jako wartość początkowa jeśli AUTO_ALPHA=True, lub stała jeśli False
+SAC_ALPHA_LR = 3e-4
+SAC_TARGET_ENTROPY_RATIO = 0.15
+
+SAC_BUFFER_SIZE = 500_000
+SAC_BUFFER_WARMUP = 10_000
+SAC_BATCH_SIZE = 1024
+SAC_UPDATE_RATIO = 0.5
+
+SAC_NUM_TRAIN_ENVS = 4
+SAC_NUM_TEST_ENVS = 1
+
+SAC_MAX_EPOCHS = 50
+SAC_STEPS_PER_EPOCH = 10_000
+SAC_COLLECTION_STEPS = 1_000
+
+SAC_EVAL_INTERVAL_DECISIONS = 10_000
+SAC_FULL_STATE_INTERVAL_DECISIONS = 100_000
+
 # EWALUACJA
 
 # Jeden „mecz” ewaluacyjny trwa najwyżej 100 rozdań. To ważne zwłaszcza dla

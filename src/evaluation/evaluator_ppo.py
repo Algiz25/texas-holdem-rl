@@ -26,9 +26,10 @@ class PPOEvaluator(BasePokerEvaluator):
             action_space=self.env.action_space("player_0"),
             observation_space=self.env.observation_space("player_0"),
             action_scaling=False,
-            # Podczas ewaluacji wybieramy najlepszą akcję, a nie próbkę z
-            # rozkładu PPO. Inaczej wynik mierzyłby również losowość polityki.
-            deterministic_eval=True,
+            # Podczas ewaluacji wybieramy próbkę z
+            # rozkładu PPO, BO INACZEJ NIE BLEFUJE. SZKODA, ŻE DOPIERO PO 20 GODZINACH TRENINGU TO ZNALAZLEM. GG
+            # tylko w pierwszej fazie nie musi blefować
+            deterministic_eval=(config.TRAINING_PHASE == 1),
         )
         
         try:

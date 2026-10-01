@@ -1,6 +1,6 @@
-# Skrypt nocny dla Windows. 
-# UWAGA: Aby komputer nie zasnął, zmień ustawienia zasilania Windows 
-# (Ustawienia -> System -> Zasilanie i uśpienie -> Uśpienie: Nigdy).
+# Skrypt nocny DQN dla Windows (Faza 1). 
+# UWAGA: Aby komputer nie zasnal, zmien ustawienia zasilania Windows 
+# (Ustawienia -> System -> Zasilanie i uspienie -> Uspienie: Nigdy).
 
 $ErrorActionPreference = "Stop"
 
@@ -13,11 +13,17 @@ $ProjectDir = Split-Path -Parent $ScriptDir
 Set-Location -Path $ProjectDir
 
 $Python = ".venv\Scripts\python.exe"
-$RunName = "overnight_long_seed_11001"
+$RunName = "overnight_dqn_seed_11001"
 $Seed = 11001
+
+# Bardzo wysoki limit - rano zatrzymujemy recznie przez Ctrl+C
 $TotalDecisions = 100000000
-$EpsilonDecayDecisions = 700000
-$EvaluationInterval = 250000
+
+# Ewaluacja co 50 000 decyzji (czyli co 5 epok). 
+$EvaluationInterval = 50000
+
+# Stala czasowa tau dla epsilona
+$EpsilonTau = 50000
 
 $NightId = Get-Date -Format "yyyyMMdd_HHmmss"
 $TerminalLogDir = "logs\dqn\overnight_$NightId"
@@ -25,10 +31,10 @@ New-Item -ItemType Directory -Force -Path $TerminalLogDir | Out-Null
 
 # Szybkie testy przed startem
 $env:PYTHONPATH = "src"
-Write-Host "[TESTY] Uruchamianie testów jednostkowych..."
+Write-Host "[TESTY] Uruchamianie testow jednostkowych..."
 & $Python -m unittest discover -s tests -q
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[BŁĄD] Testy nie przeszły. Trening zatrzymany." -ForegroundColor Red
+    Write-Host "[BLAD] Testy nie przeszly. Trening zatrzymany." -ForegroundColor Red
     exit 1
 }
 
@@ -38,7 +44,7 @@ $LatestState = "$RunDir\training_state_latest.pth"
 $TerminalLog = "$TerminalLogDir\$RunName.log"
 
 if (Test-Path $FinalState) {
-    Write-Host "[GOTOWE] $RunName osiągnął już limit $TotalDecisions decyzji." -ForegroundColor Green
+    Write-Host "[GOTOWE] $RunName osiagnal juz limit $TotalDecisions decyzji." -ForegroundColor Green
     exit 0
 }
 
@@ -46,40 +52,42 @@ $Decisions = $TotalDecisions
 $ExtraArgs = @()
 
 if (Test-Path $LatestState) {
-    $CompletedStr = & $Python -c "import sys, torch; print(int(torch.load(sys.argv[1], map_location='cpu', weights_only=True)['completed_env_steps']))" $LatestState
+    # Uzywamy pojedynczych cudzyslowow na zewnatrz, aby PowerShell nie ingerowal w kod Pythona
+    $CompletedStr = & $Python -c 'import sys, torch; print(int(torch.load(sys.argv[1], map_location="cpu", weights_only=True)["completed_env_steps"]))' $LatestState
     $Completed = [int]$CompletedStr
     $Decisions = $TotalDecisions - $Completed
     
     if ($Decisions -le 0) {
-        Write-Host "[BŁĄD] Stan ma $Completed decyzji, ale brak pliku końcowego." -ForegroundColor Red
+        Write-Host "[BLAD] Stan ma $Completed decyzji, ale brak pliku koncowego." -ForegroundColor Red
         exit 1
     }
     
     $ExtraArgs += "--resume", $LatestState
+    # Zaokraglamy do pelnych epok (10 000 dla DQN)
     $Decisions = [math]::Floor($Decisions / 10000) * 10000
     
     if ($Decisions -le 0) {
-        Write-Host "[GOTOWE] $RunName jest już przy technicznym limicie." -ForegroundColor Green
+        Write-Host "[GOTOWE] $RunName jest juz przy technicznym limicie." -ForegroundColor Green
         exit 0
     }
-    Write-Host "[WZNOWIENIE] $RunName: $Completed/$TotalDecisions decyzji." -ForegroundColor Yellow
+    Write-Host "[WZNOWIENIE] ${RunName}: $Completed/$TotalDecisions decyzji." -ForegroundColor Yellow
 }
 
-Write-Host "[START] Jeden długi trening: $RunName." -ForegroundColor Cyan
-Write-Host "[STOP] Rano naciśnij Ctrl+C jeden raz. Stan zostanie zapisany automatycznie." -ForegroundColor Yellow
+Write-Host "[START] Jeden dlugi trening DQN: $RunName." -ForegroundColor Cyan
+Write-Host "[STOP] Aby przerwac, nacisnij Ctrl+C jeden raz. Stan zostanie zapisany automatycznie." -ForegroundColor Yellow
 
 $env:PYTHONUNBUFFERED = "1"
 $env:PYTHONPATH = "src"
 
-# Uruchomienie treningu z przekierowaniem logów do pliku i na ekran
+# Uruchomienie treningu DQN
 & $Python src\training\train_dqn.py `
     --run-name $RunName `
     --seed $Seed `
     --decisions $Decisions `
-    --epsilon-decay-decisions $EpsilonDecayDecisions `
     --evaluation-interval $EvaluationInterval `
+    --epsilon-tau $EpsilonTau `
     @ExtraArgs | Tee-Object -FilePath $TerminalLog -Append
 
-Write-Host "`nTrening zakończony albo bezpiecznie zatrzymany." -ForegroundColor Green
+Write-Host "`nTrening zakonczony albo bezpiecznie zatrzymany." -ForegroundColor Green
 Write-Host "Model: $RunDir"
 Write-Host "TensorBoard: .venv\Scripts\tensorboard.exe --logdir logs\dqn"
