@@ -1,5 +1,6 @@
 """Wspólna infrastruktura treningu oraz harmonogram rzetelnej ewaluacji."""
 from __future__ import annotations
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -123,6 +124,8 @@ class BasePokerTrainer:
         train_env_factories=None,
         test_env_factories=None,
         baseline_model_path=None,
+        evaluation_tournaments=None,
+        final_evaluation_tournaments=None,
     ):
         self.algo_name = algo_name
         self.training_phase = training_phase
@@ -132,6 +135,16 @@ class BasePokerTrainer:
         self.steps_per_epoch = steps_per_epoch
         self.total_steps = max_epochs * steps_per_epoch
         self.observation_size = config.OBSERVATION_SIZE
+        self.evaluation_tournaments = evaluation_tournaments or (
+            config.DQN_EVAL_TOURNAMENTS_PER_SUITE
+            if algo_name == "dqn"
+            else config.EVAL_TOURNAMENTS_PER_SUITE
+        )
+        self.final_evaluation_tournaments = final_evaluation_tournaments or (
+            config.DQN_FINAL_EVAL_TOURNAMENTS_PER_SUITE
+            if algo_name == "dqn"
+            else config.FINAL_EVAL_TOURNAMENTS_PER_SUITE
+        )
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         default_checkpoint_dir = (
@@ -168,6 +181,95 @@ class BasePokerTrainer:
         self.train_envs = SubprocVectorEnv(train_factories)
         self.test_envs = SubprocVectorEnv(test_factories)
 
+    @staticmethod
+    def _phase_one_validation_score(results) -> float | None:
+        """Połącz stałe zestawy botów zgodnie z profilem treningowym DQN."""
+        required = tuple(config.DQN_PHASE1_OPPONENT_WEIGHTS)
+        if any(suite not in results for suite in required):
+            return None
+        return float(
+            sum(
+                config.DQN_PHASE1_OPPONENT_WEIGHTS[suite]
+                * results[suite].bb_per_100
+                for suite in required
+            )
+        )
+
+    def _validation_score(self, results) -> float | None:
+        """Wybierz DQN na żetonach, chroniąc fazę self-play przed zapominaniem."""
+        if getattr(self, "algo_name", "dqn") != "dqn":
+            phase_result = results.get("phase1_mix")
+            return phase_result.bb_per_100 if phase_result else None
+        bot_score = self._phase_one_validation_score(results)
+        if self.phase_name != "2":
+            return bot_score
+        baseline = results.get("baseline")
+        if bot_score is None or baseline is None:
+            return None
+        return float(0.5 * bot_score + 0.5 * baseline.bb_per_100)
+
+    def _evaluation_suites(self) -> tuple[str, ...]:
+        """Rozszerz testy tylko dla DQN; pozostałe algorytmy zachowują main."""
+        if getattr(self, "algo_name", None) != "dqn":
+            return config.EVAL_SUITES
+        suites = ("random", "passive", "mixed", "phase1_mix")
+        if self.phase_name == "2" and getattr(self, "baseline_model_path", None) is not None:
+            suites += ("baseline",)
+        return suites
+
+    def _update_top_candidates(
+        self,
+        *,
+        checkpoint_path: Path,
+        env_step: int,
+        score: float,
+        results,
+    ) -> None:
+        """Zachowaj trzy najlepsze checkpointy DQN wraz z wynikiem wyboru."""
+        if getattr(self, "algo_name", None) != "dqn":
+            return
+        manifest_path = self.checkpoint_dir / "top_candidates.json"
+        candidates = []
+        if manifest_path.exists():
+            try:
+                candidates = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                candidates = []
+        candidates = [item for item in candidates if item.get("step") != env_step]
+        candidates.append(
+            {
+                "step": int(env_step),
+                "score": float(score),
+                "checkpoint": checkpoint_path.name,
+                "bb_per_100": {
+                    suite: float(result.bb_per_100)
+                    for suite, result in results.items()
+                },
+            }
+        )
+        candidates = [
+            item
+            for item in candidates
+            if (self.checkpoint_dir / str(item.get("checkpoint", ""))).exists()
+        ]
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+        candidates = candidates[:3]
+        for rank, candidate in enumerate(candidates, start=1):
+            shutil.copy2(
+                self.checkpoint_dir / candidate["checkpoint"],
+                self.checkpoint_dir / f"candidate_{rank}.pth",
+            )
+        for rank in range(len(candidates) + 1, 4):
+            stale = self.checkpoint_dir / f"candidate_{rank}.pth"
+            if stale.exists():
+                stale.unlink()
+        temporary_path = manifest_path.with_suffix(".json.tmp")
+        temporary_path.write_text(
+            json.dumps(candidates, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_path.replace(manifest_path)
+
     @property
     def phase_name(self) -> str:
         """Jednolita nazwa działa zarówno dla fazy `1`, jak i późniejszych nazw."""
@@ -189,14 +291,16 @@ class BasePokerTrainer:
         shutil.copy2(checkpoint_path, self.checkpoint_dir / "latest.pth")
 
         evaluator = self.evaluator_class(
-            num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
+            num_tournaments=getattr(
+                self, "evaluation_tournaments", config.EVAL_TOURNAMENTS_PER_SUITE
+            ),
             model_path=checkpoint_path,
-            baseline_model_path=self.baseline_model_path,
+            baseline_model_path=getattr(self, "baseline_model_path", None),
             training_phase=self.training_phase,
             report_dir=self.evaluation_report_dir,
         )
         results = evaluator.evaluate(
-            suites=config.EVAL_SUITES,
+            suites=self._evaluation_suites(),
             stage="validation",
             step=env_step,
             seed_base=config.EVAL_VALIDATION_SEED,
@@ -204,13 +308,20 @@ class BasePokerTrainer:
         # Mieszanka fazy 1 jest głównym środowiskiem walidacyjnym. bb/100
         # wykorzystuje wszystkie rozdania, więc jest stabilniejsze od samego
         # procentu wygranych turniejów.
-        phase_result = results.get("phase1_mix")
-        if phase_result and phase_result.bb_per_100 > self.best_validation_score:
-            self.best_validation_score = phase_result.bb_per_100
+        validation_score = self._validation_score(results)
+        if validation_score is not None:
+            self._update_top_candidates(
+                checkpoint_path=checkpoint_path,
+                env_step=env_step,
+                score=validation_score,
+                results=results,
+            )
+        if validation_score is not None and validation_score > self.best_validation_score:
+            self.best_validation_score = validation_score
             shutil.copy2(checkpoint_path, self.checkpoint_dir / "best.pth")
             print(
                 f"[ZAPIS] Nowy najlepszy model: "
-                f"{phase_result.bb_per_100:.2f} bb/100."
+                f"ważone {validation_score:.2f} bb/100."
             )
 
         self._log_evaluation_to_tensorboard(results, "validation", env_step)
@@ -234,36 +345,52 @@ class BasePokerTrainer:
     def run_initial_evaluation(self, *, learner_policy) -> None:
         """Zapisz punkt odniesienia przed wykonaniem pierwszej aktualizacji sieci."""
         self._preserve_existing_checkpoints()
+        if getattr(self, "algo_name", None) == "dqn":
+            # Po zarchiwizowaniu poprzedniego runu nie pozwalamy, aby jego
+            # roboczy `best.pth` lub ranking kandydatów wpłynął na nowy run.
+            for stale in (
+                self.checkpoint_dir / "best.pth",
+                self.checkpoint_dir / "top_candidates.json",
+            ):
+                if stale.exists():
+                    stale.unlink()
+            for stale in self.checkpoint_dir.glob("candidate_*.pth"):
+                stale.unlink()
         checkpoint_path = self.checkpoint_dir / "step_000000000.pth"
         torch.save(learner_policy.state_dict(), checkpoint_path)
         evaluator = self.evaluator_class(
-            num_tournaments=config.EVAL_TOURNAMENTS_PER_SUITE,
+            num_tournaments=getattr(
+                self, "evaluation_tournaments", config.EVAL_TOURNAMENTS_PER_SUITE
+            ),
             model_path=checkpoint_path,
-            baseline_model_path=self.baseline_model_path,
+            baseline_model_path=getattr(self, "baseline_model_path", None),
             training_phase=self.training_phase,
             report_dir=self.evaluation_report_dir,
         )
+        initial_stage = (
+            "baseline_initial_weights" if self.phase_name == "2" else "baseline_untrained"
+        )
         results = evaluator.evaluate(
-            suites=config.EVAL_SUITES,
-            stage="baseline_untrained",
+            suites=self._evaluation_suites(),
+            stage=initial_stage,
             step=0,
             seed_base=config.EVAL_VALIDATION_SEED,
         )
         # Losowy uczeń jest stałym punktem odniesienia niezależnym od
         # inicjalizacji sieci. Liczymy go raz, na identycznych rozdaniach.
         evaluator.evaluate(
-            suites=config.EVAL_SUITES,
+            suites=self._evaluation_suites(),
             stage="baseline_random",
             step=0,
             seed_base=config.EVAL_VALIDATION_SEED,
             learner_mode="random",
         )
-        self._log_evaluation_to_tensorboard(results, "baseline_untrained", 0)
-        phase_result = results.get("phase1_mix")
-        if phase_result:
-            self.best_validation_score = phase_result.bb_per_100
-            shutil.copy2(checkpoint_path, self.checkpoint_dir / "best.pth")
-            shutil.copy2(checkpoint_path, self.checkpoint_dir / "latest.pth")
+        self._log_evaluation_to_tensorboard(results, initial_stage, 0)
+        # Punkt startowy jest diagnostyką, a nie kandydatem na najlepszy
+        # wytrenowany model. Inaczej szczęśliwa inicjalizacja mogłaby blokować
+        # zapis wszystkich późniejszych checkpointów.
+        self.best_validation_score = float("-inf")
+        shutil.copy2(checkpoint_path, self.checkpoint_dir / "latest.pth")
 
     def _preserve_existing_checkpoints(self) -> None:
         """Skopiuj modele z wcześniejszego treningu przed użyciem stałych nazw.
@@ -276,6 +403,9 @@ class BasePokerTrainer:
             return
 
         existing = sorted(self.checkpoint_dir.glob("*.pth"))
+        candidate_manifest = self.checkpoint_dir / "top_candidates.json"
+        if candidate_manifest.exists():
+            existing.append(candidate_manifest)
         if existing:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             archive_dir = self.checkpoint_dir / "archive" / timestamp
@@ -295,14 +425,18 @@ class BasePokerTrainer:
         torch.save(learner_policy.state_dict(), final_path)
         shutil.copy2(final_path, self.checkpoint_dir / "latest.pth")
         evaluator = self.evaluator_class(
-            num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+            num_tournaments=getattr(
+                self,
+                "final_evaluation_tournaments",
+                config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+            ),
             model_path=final_path,
-            baseline_model_path=self.baseline_model_path,
+            baseline_model_path=getattr(self, "baseline_model_path", None),
             training_phase=self.training_phase,
             report_dir=self.evaluation_report_dir,
         )
         final_results = evaluator.evaluate(
-            suites=config.EVAL_SUITES,
+            suites=self._evaluation_suites(),
             stage="final_last",
             step=env_step,
             seed_base=config.EVAL_FINAL_SEED,
@@ -315,14 +449,18 @@ class BasePokerTrainer:
         best_path = self.checkpoint_dir / "best.pth"
         if best_path.exists() and best_path != final_path:
             best_evaluator = self.evaluator_class(
-                num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+                num_tournaments=getattr(
+                    self,
+                    "final_evaluation_tournaments",
+                    config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
+                ),
                 model_path=best_path,
-                baseline_model_path=self.baseline_model_path,
+                baseline_model_path=getattr(self, "baseline_model_path", None),
                 training_phase=self.training_phase,
                 report_dir=self.evaluation_report_dir,
             )
             best_results = best_evaluator.evaluate(
-                suites=config.EVAL_SUITES,
+                suites=self._evaluation_suites(),
                 stage="final_best",
                 step=env_step,
                 seed_base=config.EVAL_FINAL_SEED,
@@ -344,11 +482,27 @@ class BasePokerTrainer:
                 step,
             )
             self.tensorboard_writer.add_scalar(
+                f"{prefix}/tournament_win_rate", result.tournament_win_rate, step
+            )
+            self.tensorboard_writer.add_scalar(
+                f"{prefix}/hand_win_rate", result.hand_win_rate, step
+            )
+            self.tensorboard_writer.add_scalar(
                 f"{prefix}/vpip", result.vpip, step
             )
             self.tensorboard_writer.add_scalar(
                 f"{prefix}/pfr", result.pfr, step
             )
+            self.tensorboard_writer.add_scalar(
+                f"{prefix}/showdown_rate", result.showdown_rate, step
+            )
+            self.tensorboard_writer.add_scalar(
+                f"{prefix}/showdown_win_rate", result.showdown_win_rate, step
+            )
+            for action_name, action_rate in result.action_rates.items():
+                self.tensorboard_writer.add_scalar(
+                    f"{prefix}/actions/{action_name}", action_rate, step
+                )
         self.tensorboard_writer.flush()
 
     def setup_and_train(self):
