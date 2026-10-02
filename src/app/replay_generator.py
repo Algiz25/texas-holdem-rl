@@ -101,7 +101,9 @@ def load_agent(agent_cfg: dict, env, device="cpu"):
             action_space=action_space,
             observation_space=observation_space, 
             action_scaling=False,
-            deterministic_eval=(config.TRAINING_PHASE == 1)
+            # Replay ma być odtwarzalny i nie powinien losować innej akcji po
+            # każdym uruchomieniu tego samego turnieju.
+            deterministic_eval=True
         )
         policy.load_state_dict(torch.load(path, map_location=device, weights_only=True))
         policy.eval()
@@ -113,7 +115,7 @@ def load_agent(agent_cfg: dict, env, device="cpu"):
             actor=actor,
             action_space=action_space,
             observation_space=observation_space,
-            deterministic_eval=(config.TRAINING_PHASE == 1)
+            deterministic_eval=True
         )
         policy.load_state_dict(torch.load(path, map_location=device, weights_only=True))
         policy.eval()
@@ -308,7 +310,11 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
             batch = Batch(
                 obs=Batch(
                     observation=np.expand_dims(obs_vec, axis=0),
-                    action_mask=np.expand_dims(action_mask, axis=0)
+                    action_mask=np.expand_dims(action_mask, axis=0),
+                    # IQN korzysta z nazw wymaganych przez Tianshou, podczas
+                    # gdy pozostałe polityki rozumieją starsze pola powyżej.
+                    obs=np.expand_dims(obs_vec, axis=0),
+                    mask=np.expand_dims(action_mask, axis=0),
                 ),
                 info={}
             )
@@ -352,9 +358,11 @@ def record_tournament(seats_config, output_file="tournament_history.json"):
             current_hand_data["showdown"] = showdown_data.copy()
             showdown_data.clear()
         
-        if step_count > getattr(config, "MAX_STEPS_PER_TOURNAMENT", 5000):
-            print("Ostrzeżenie: Przekroczono limit kroków, przerywam wcześnie.")
-            break
+        if step_count > getattr(config, "MAX_STEPS_PER_TOURNAMENT", 100_000):
+            raise RuntimeError(
+                "Turniej przekroczył bezpieczny limit 100 000 akcji; "
+                "nie zapisano niepełnego replayu."
+            )
 
     # Zamknięcie ostatniego rozdania w JSON-ie
     if current_hand_data is not None:
