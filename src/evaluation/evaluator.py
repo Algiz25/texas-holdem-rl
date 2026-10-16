@@ -132,6 +132,7 @@ class EvaluationResult:
     action_rates: dict[str, float] = field(default_factory=dict)
     actions_by_street: dict[str, dict[str, int]] = field(default_factory=dict)
     actions_by_hand_category: dict[str, dict[str, int]] = field(default_factory=dict)
+    actions_by_street_and_category: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
 
     def csv_row(self) -> dict[str, Any]:
         """Spłaszcz najważniejsze metryki do formatu wygodnego dla arkusza."""
@@ -163,6 +164,7 @@ class EvaluationAccumulator:
         self.actions: Counter[str] = Counter()
         self.actions_by_street: dict[str, Counter[str]] = defaultdict(Counter)
         self.actions_by_category: dict[str, Counter[str]] = defaultdict(Counter)
+        self.actions_by_street_and_category = defaultdict(lambda: defaultdict(Counter))
         self.observed_hands = 0
         self.vpip_hands = 0
         self.pfr_hands = 0
@@ -194,6 +196,7 @@ class EvaluationAccumulator:
             else "preflop_unknown"
         )
         self.actions_by_category[category][action_name] += 1
+        self.actions_by_street_and_category[street][category][action_name] += 1
 
     def record_tournament(
         self,
@@ -298,6 +301,7 @@ class EvaluationAccumulator:
             action_rates=action_rates,
             actions_by_street=_nested_counters_to_dict(self.actions_by_street),
             actions_by_hand_category=_nested_counters_to_dict(self.actions_by_category),
+            actions_by_street_and_category={s: _nested_counters_to_dict(c) for s, c in self.actions_by_street_and_category.items()}
         )
 
 

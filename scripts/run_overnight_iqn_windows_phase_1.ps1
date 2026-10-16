@@ -13,18 +13,18 @@ $ProjectDir = Split-Path -Parent $ScriptDir
 Set-Location -Path $ProjectDir
 
 $Python = ".venv\Scripts\python.exe"
-$RunName = "overnight_iqn_seed_11001"
-$Seed = 11001
+$RunName = "overnight_iqn_seed_621621621"
+$Seed = 621621621
 
 # Bardzo wysoki limit - rano zatrzymujemy recznie przez Ctrl+C
 $TotalDecisions = 100000000
 
 # Ewaluacja co 50 000 decyzji (czyli co 5 epok). 
-$EvaluationInterval = 50000
+$EvaluationInterval = 100000
 
 # Stala czasowa tau dla epsilona - wydłużona do 500 000 dla długiego treningu nocnego,
 # aby agent eksplorował przez pierwsze ~2 miliony kroków.
-$EpsilonTau = 500000
+$EpsilonTau = 50000
 
 $NightId = Get-Date -Format "yyyyMMdd_HHmmss"
 $TerminalLogDir = "logs\iqn\overnight_$NightId"

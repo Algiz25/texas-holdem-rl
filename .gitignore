@@ -37,9 +37,11 @@ checkpoints/dqn/
 checkpoints/sac/
 checkpoints/iqn/
 
+scripts/heatmap_generator.py
 scripts/raport_generator.py
 scripts/raport_generator_phase2.py
 scripts/raport_genrator_phase2.py
 scripts/tools
 
 PPO_Phase2_Report.pdf
+raports

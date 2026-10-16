@@ -1,9 +1,7 @@
 from observation.schema import OBSERVATION_SIZE
-
-
 # ZMIENNE ŚRODOWISKOWE
 # póki co jedyna dostępna faza to 1
-TRAINING_PHASE = 2
+TRAINING_PHASE = 1
 ACTION_SPACE = 5    # nie zmieniać
 STARTING_CHIPS = 200
 NUM_PLAYERS = 4     # nie zmieniać
@@ -44,12 +42,12 @@ EVAL_SMOKE_TOURNAMENTS = 1
 # Domyślny interwał zachowujemy dla wieloagentowego PPO. DQN nadpisuje go
 # interwałem liczonym w swoich decyzjach, zdefiniowanym niżej.
 EVAL_INTERVAL_STEPS = 100_000
-EVAL_TOURNAMENTS_PER_SUITE = 200
+EVAL_TOURNAMENTS_PER_SUITE = 500
 
 # Test końcowy korzysta z większej próby i innego zakresu seedów niż
 # walidacja. 200 turniejów na zestaw ogranicza wariancję, ale nie wydłuża
 # nadmiernie pierwszego lokalnego treningu na bezwentylatorowym MacBooku.
-FINAL_EVAL_TOURNAMENTS_PER_SUITE = 200
+FINAL_EVAL_TOURNAMENTS_PER_SUITE = 500
 EVAL_VALIDATION_SEED = 20_260
 EVAL_FINAL_SEED = 90_260
 
@@ -166,47 +164,48 @@ else:
 
 # IQN
 IQN_GAMMA = 0.99
-IQN_TARGET_NET_UPDATE = 5000
 IQN_SAMPLE_SIZE = 32
 IQN_ONLINE_SAMPLE_SIZE = 16
 IQN_TARGET_SAMPLE_SIZE = 16
 IQN_NUM_COSINES = 64
 IQN_N_STEP = 3
-IQN_BATCH_SIZE = 256
+IQN_BATCH_SIZE = 512
 IQN_NUM_TRAIN_ENVS = 4
 IQN_NUM_TEST_ENVS = 1
 IQN_MAX_EPOCHS = 25
 IQN_STEPS_PER_EPOCH = 10_000
 IQN_COLLECTION_STEPS = 1_000
-IQN_EVAL_INTERVAL_DECISIONS = 50_000
+IQN_EVAL_INTERVAL_DECISIONS = 100_000
 IQN_FULL_STATE_INTERVAL_DECISIONS = 100_000
 
 if TRAINING_PHASE == 1:
     IQN_LEARNING_RATE = 5e-5
-    IQN_BUFFER_SIZE = 500_000
+    IQN_BUFFER_SIZE = 200_000
     IQN_BUFFER_WARMUP = 10_000
-    IQN_UPDATE_RATIO = 0.5
-    
+    IQN_UPDATE_RATIO = 0.1
+
+    IQN_TARGET_NET_UPDATE = 10000
     # epsilony - Faza 1
     IQN_EPS_MAX = 1.0
     IQN_EPS_MIN = 0.1
-    IQN_EPS_TAU = 500_000 
+    IQN_EPS_TAU = 50_000 
 else:
     # Faza 2 (Self-Play)
     IQN_LEARNING_RATE = 1e-5
-    IQN_BUFFER_SIZE = 1_000_000
+    IQN_BUFFER_SIZE = 100_000
     IQN_BUFFER_WARMUP = 10_000
-    IQN_UPDATE_RATIO = 0.25
-    
+    IQN_UPDATE_RATIO = 0.1
+
+    IQN_TARGET_NET_UPDATE = 2000
     # epsilony - Faza 2
     IQN_EPS_MAX = 0.15
     IQN_EPS_MIN = 0.05
-    IQN_EPS_TAU = 1_000_000
+    IQN_EPS_TAU = 250_000
 
 # EWALUACJA
 
 if TRAINING_PHASE == 1:
-    EVAL_SUITES = ("random", "passive", "mixed", "phase1_mix")
+    EVAL_SUITES = (["phase1_mix"])
 else:
     EVAL_SUITES = ("phase1_mix", "baseline")
 

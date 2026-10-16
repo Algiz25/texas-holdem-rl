@@ -50,6 +50,6 @@ class PPOEvaluator(BasePokerEvaluator):
 if __name__ == "__main__":
     ppo_eval = PPOEvaluator(
         num_tournaments=config.FINAL_EVAL_TOURNAMENTS_PER_SUITE,
-        model_path=PPO_CHECKPOINT_DIR / "phase2_selfplay_seed_11001" / "final.pth",
+        model_path=r"C:\Users\borix\VSCodeProjects\texas-holdem-rl\checkpoints\ppo\REAL_BEST\phase_2\step_014991360.pth",
     )
     ppo_eval.evaluate()
