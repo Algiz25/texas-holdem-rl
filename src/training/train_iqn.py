@@ -201,6 +201,8 @@ class IQNPokerTrainer(BasePokerTrainer):
 
             ensure_finite_model(net_learner, global_step)
 
+            evaluation_due = global_step >= self.next_evaluation_step
+
             if self.training_phase == 2:
                 # Co ewaluację aktualizujemy "Latest Self"
                 if evaluation_due:
@@ -214,7 +216,6 @@ class IQNPokerTrainer(BasePokerTrainer):
                     self.train_envs.set_env_attr("new_historical_model_weights", model_weights)
                     self.test_envs.set_env_attr("new_historical_model_weights", model_weights)
 
-            evaluation_due = global_step >= self.next_evaluation_step
             if evaluation_due:
                 save_training_state(
                     algorithm,
