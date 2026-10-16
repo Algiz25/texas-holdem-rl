@@ -1,9 +1,8 @@
 import torch
 from evaluation.evaluator import BasePokerEvaluator
-from models import PokerFeatureExtractor
+from models import PokerFeatureExtractor, MaskedImplicitQuantileNetwork
 from paths import IQN_CHECKPOINT_DIR
 from tianshou.algorithm.modelfree.iqn import IQNPolicy
-from tianshou.utils.net.discrete import ImplicitQuantileNetwork
 import config
 
 class IQNEvaluator(BasePokerEvaluator):
@@ -14,7 +13,7 @@ class IQNEvaluator(BasePokerEvaluator):
             path = self.model_path
 
         feature_net = PokerFeatureExtractor(state_shape=config.OBSERVATION_SIZE).to(self.device)
-        net = ImplicitQuantileNetwork(
+        net = MaskedImplicitQuantileNetwork(
             preprocess_net=feature_net,
             action_shape=config.ACTION_SPACE,
             num_cosines=config.IQN_NUM_COSINES,

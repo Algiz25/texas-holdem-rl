@@ -13,21 +13,21 @@ $ProjectDir = Split-Path -Parent $ScriptDir
 Set-Location -Path $ProjectDir
 
 $Python = ".venv\Scripts\python.exe"
-$RunName = "phase2_selfplay_iqn_seed_22002"
-$Seed = 22002
+$RunName = "phase2_iqn_42"
+$Seed = 42
 
 # Faza 2 wymaga więcej czasu, np. 20 milionów decyzji
 $TotalDecisions = 20000000
 
 # WSKAŻ TUTAJ ŚCIEŻKĘ DO NAJLEPSZEGO MODELU Z FAZY 1
-$BaseModel = "checkpoints\iqn\REAL_BEST\phase_1\step_000900000.pth"
+$BaseModel = "checkpoints\iqn\REAL_BEST\phase_1\seed_001600000\step_001600000.pth"
 
 # Ewaluacja co 50 000 decyzji
-$EvaluationInterval = 50000
+$EvaluationInterval = 100000
 
 # W fazie 2 chcemy, żeby agent eksplorował, ale mniej agresywnie niż w fazie 1.
 # Możemy ustawić mniejsze tau, żeby szybciej zszedł do minimalnego epsilona.
-$EpsilonTau = 1000000
+$EpsilonTau = 250000
 
 $NightId = Get-Date -Format "yyyyMMdd_HHmmss"
 $TerminalLogDir = "logs\iqn\overnight_$NightId"

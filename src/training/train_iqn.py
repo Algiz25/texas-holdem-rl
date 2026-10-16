@@ -16,12 +16,11 @@ from tianshou.algorithm.modelfree.iqn import IQNPolicy
 from tianshou.trainer import OffPolicyTrainer, OffPolicyTrainerParams
 from tianshou.algorithm.optim import AdamOptimizerFactory
 from tianshou.utils import TensorboardLogger
-from tianshou.utils.net.discrete import ImplicitQuantileNetwork
 
 import config
 from training.learner_environment import make_learner_env
 from evaluation.evaluator_iqn import IQNEvaluator
-from models import PokerFeatureExtractor
+from models import PokerFeatureExtractor, MaskedImplicitQuantileNetwork
 from paths import iqn_run_dir, tensorboard_run_dir
 
 def extract_model_weights(policy_state_dict: dict) -> dict:
@@ -73,7 +72,7 @@ class IQNPokerTrainer(BasePokerTrainer):
     def setup_and_train(self):
         # Konfiguracja sieci
         feature_net = PokerFeatureExtractor(state_shape=self.observation_size).to(self.device)
-        net_learner = ImplicitQuantileNetwork(
+        net_learner = MaskedImplicitQuantileNetwork(
             preprocess_net=feature_net,
             action_shape=config.ACTION_SPACE,
             num_cosines=config.IQN_NUM_COSINES,

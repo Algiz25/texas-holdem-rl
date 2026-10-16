@@ -24,11 +24,9 @@ import torch
 
 import config
 from environment import TexasHoldemTournament
-from models import MaskedActor, PokerFeatureExtractor
-from tianshou.utils.net.discrete import ImplicitQuantileNetwork
+from models import MaskedActor, PokerFeatureExtractor, MaskedImplicitQuantileNetwork
 import torch.nn as nn
-
-
+from tianshou.data import Batch
 
 # Korzystamy z tego samego rozkładu co ewaluator. Przeciwnik Mixed nie może
 # zmieniać charakteru tylko dlatego, że został uruchomiony inną ścieżką kodu.
@@ -119,7 +117,7 @@ class PokerLearnerEnv(gym.Env):
         if self.latest_model is None:
             if self.algo_name == "iqn":
                 feature_net = PokerFeatureExtractor(state_shape=config.OBSERVATION_SIZE).to("cpu")
-                self.latest_model = ImplicitQuantileNetwork(
+                self.latest_model = MaskedImplicitQuantileNetwork(
                     preprocess_net=feature_net,
                     action_shape=config.ACTION_SPACE,
                     num_cosines=config.IQN_NUM_COSINES,
@@ -137,7 +135,7 @@ class PokerLearnerEnv(gym.Env):
     def new_historical_model_weights(self, model_state_dict: dict) -> None:
         if self.algo_name == "iqn":
             feature_net = PokerFeatureExtractor(state_shape=config.OBSERVATION_SIZE).to("cpu")
-            model = ImplicitQuantileNetwork(
+            model = MaskedImplicitQuantileNetwork(
                 preprocess_net=feature_net,
                 action_shape=config.ACTION_SPACE,
                 num_cosines=config.IQN_NUM_COSINES,
@@ -155,22 +153,18 @@ class PokerLearnerEnv(gym.Env):
 
     def _get_nn_action(self, model: nn.Module, obs: np.ndarray, mask: np.ndarray) -> int:
         with torch.no_grad():
-            obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
-            mask_tensor = torch.as_tensor(mask, dtype=torch.bool).unsqueeze(0)
+            batch = Batch(
+                observation=np.expand_dims(obs, axis=0),
+                action_mask=np.expand_dims(mask, axis=0)
+            )
             
             if self.algo_name == "iqn":
-                # Kształt out to (batch, action_dim, sample_size), np. (1, 5, 32)
-                (out, _), _ = model(obs_tensor, sample_size=config.IQN_SAMPLE_SIZE)
-                logits = out.mean(dim=2) # Uśredniamy kwantyle, żeby dostać Q-values
-                
-                temperature = 0.01
-                logits = logits / temperature
+                (out, _), _ = model(batch, sample_size=config.IQN_SAMPLE_SIZE)
+                logits = out.mean(dim=2)
+                logits = logits / 0.01
             else:
-                # Dla PPO i SAC model od razu zwraca poprawne, znormalizowane logity
-                logits, _ = model(obs_tensor)
+                logits, _ = model(batch)
                 
-            # Maskowanie niedozwolonych akcji
-            logits = torch.where(mask_tensor, logits, torch.tensor(-1e9))
             dist = torch.distributions.Categorical(logits=logits)
             action = dist.sample().item()
             

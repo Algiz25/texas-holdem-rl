@@ -2,8 +2,45 @@ import torch
 import torch.nn as nn
 from tianshou.data import Batch
 from tianshou.utils.net.common import ModuleWithVectorOutput
+from tianshou.utils.net.discrete import ImplicitQuantileNetwork
 
 import config
+
+class MaskedImplicitQuantileNetwork(ImplicitQuantileNetwork):
+    """
+    Nakładka na sieć IQN Tianshou 2.0+, która maskuje niedozwolone akcje 
+    bezpośrednio na wyjściu (kwantylach Q-values).
+    """
+    def forward(self, obs, sample_size=1, **kwargs):
+        iqn_out, state = super().forward(obs, sample_size=sample_size, **kwargs)
+        quantiles, taus = iqn_out
+
+        device = next(self.parameters()).device
+
+        action_mask = None
+        if isinstance(obs, Batch):
+            if hasattr(obs, 'action_mask'):
+                action_mask = obs.action_mask
+            elif hasattr(obs, 'obs') and hasattr(obs.obs, 'action_mask'):
+                action_mask = obs.obs.action_mask
+            elif hasattr(obs, 'obs') and hasattr(obs.obs, 'mask'):
+                action_mask = obs.obs.mask
+            elif hasattr(obs, 'mask'):
+                action_mask = obs.mask
+        elif isinstance(obs, dict):
+            action_mask = obs.get("action_mask", obs.get("mask"))
+
+        if action_mask is not None:
+            mask_tensor = torch.as_tensor(action_mask, dtype=torch.bool, device=device)
+            
+            if quantiles.dim() == 3 and mask_tensor.dim() == 2:
+                mask_tensor = mask_tensor.unsqueeze(-1)
+            elif quantiles.dim() == 2 and mask_tensor.dim() == 1:
+                mask_tensor = mask_tensor.unsqueeze(0)
+                
+            quantiles = torch.where(mask_tensor, quantiles, torch.tensor(-1e9, device=device))
+
+        return (quantiles, taus), state
 
 class MaskedActor(nn.Module):
     """Sieć Actora: zwraca logity dla dozwolonych akcji, korzystając z powiększonej architektury dwugałęziowej."""

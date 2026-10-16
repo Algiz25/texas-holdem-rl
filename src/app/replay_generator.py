@@ -10,13 +10,12 @@ from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
 from tianshou.algorithm.modelfree.reinforce import ProbabilisticActorPolicy
 from tianshou.algorithm.modelfree.discrete_sac import DiscreteSACPolicy
 from tianshou.algorithm.modelfree.iqn import IQNPolicy
-from tianshou.utils.net.discrete import ImplicitQuantileNetwork
 from torch.distributions import Categorical
 
 import config
 import app.app_config
 from environment import TexasHoldemTournament
-from models import MaskedActor, Critic, PokerFeatureExtractor
+from models import MaskedActor, Critic, PokerFeatureExtractor, MaskedImplicitQuantileNetwork
 from observation.derived import hand_category
 from rlcard.games.limitholdem import PlayerStatus
 
@@ -121,7 +120,7 @@ def load_agent(agent_cfg: dict, env, device="cpu"):
         
     elif agent_type == "iqn":
         feature_net = PokerFeatureExtractor(state_shape=config.OBSERVATION_SIZE).to(device)
-        net = ImplicitQuantileNetwork(
+        net = MaskedImplicitQuantileNetwork(
             preprocess_net=feature_net,
             action_shape=config.ACTION_SPACE,
             num_cosines=config.IQN_NUM_COSINES,

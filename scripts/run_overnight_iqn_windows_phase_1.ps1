@@ -14,7 +14,7 @@ Set-Location -Path $ProjectDir
 
 $Python = ".venv\Scripts\python.exe"
 $RunName = "overnight_iqn_seed_621621621"
-$Seed = 621621621
+$Seed = 5236423
 
 # Bardzo wysoki limit - rano zatrzymujemy recznie przez Ctrl+C
 $TotalDecisions = 100000000

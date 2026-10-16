@@ -1,7 +1,7 @@
 from observation.schema import OBSERVATION_SIZE
 # ZMIENNE ŚRODOWISKOWE
 # póki co jedyna dostępna faza to 1
-TRAINING_PHASE = 1
+TRAINING_PHASE = 2
 ACTION_SPACE = 5    # nie zmieniać
 STARTING_CHIPS = 200
 NUM_PLAYERS = 4     # nie zmieniać
