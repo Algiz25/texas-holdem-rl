@@ -42,12 +42,12 @@ EVAL_SMOKE_TOURNAMENTS = 1
 # Domyślny interwał zachowujemy dla wieloagentowego PPO. DQN nadpisuje go
 # interwałem liczonym w swoich decyzjach, zdefiniowanym niżej.
 EVAL_INTERVAL_STEPS = 100_000
-EVAL_TOURNAMENTS_PER_SUITE = 100
+EVAL_TOURNAMENTS_PER_SUITE = 500
 
 # Test końcowy korzysta z większej próby i innego zakresu seedów niż
 # walidacja. 200 turniejów na zestaw ogranicza wariancję, ale nie wydłuża
 # nadmiernie pierwszego lokalnego treningu na bezwentylatorowym MacBooku.
-FINAL_EVAL_TOURNAMENTS_PER_SUITE = 100
+FINAL_EVAL_TOURNAMENTS_PER_SUITE = 500
 EVAL_VALIDATION_SEED = 20_260
 EVAL_FINAL_SEED = 90_260
 
@@ -143,15 +143,15 @@ SAC_MAX_EPOCHS = 50
 SAC_STEPS_PER_EPOCH = 10_000
 SAC_COLLECTION_STEPS = 1_000
 
-SAC_EVAL_INTERVAL_DECISIONS = 50_000
+SAC_EVAL_INTERVAL_DECISIONS = 100_000
 SAC_FULL_STATE_INTERVAL_DECISIONS = 100_000
 
 if TRAINING_PHASE == 1:
     SAC_ACTOR_LR = 1e-4
     SAC_CRITIC_LR = 1e-4
-    SAC_TARGET_ENTROPY_RATIO = 0.15
-    SAC_UPDATE_RATIO = 0.5
-    SAC_BUFFER_SIZE = 500_000
+    SAC_TARGET_ENTROPY_RATIO = 0.02
+    SAC_UPDATE_RATIO = 0.1
+    SAC_BUFFER_SIZE = 200_000
     SAC_BUFFER_WARMUP = 10_000
 else:
     SAC_ACTOR_LR = 5e-5
@@ -205,9 +205,9 @@ else:
 # EWALUACJA
 
 if TRAINING_PHASE == 1:
-    EVAL_SUITES = (["phase1_mix"])
+    EVAL_SUITES = (["phase1_mix", "passive"])
 else:
-    EVAL_SUITES = ("phase1_mix", "baseline")
+    EVAL_SUITES = ("phase1_mix", "baseline", "passive")
 
 EVAL_MAX_HANDS_PER_MATCH = 100
 EVAL_MAX_ACTIONS_PER_MATCH = 5_000

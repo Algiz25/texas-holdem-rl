@@ -1,5 +1,6 @@
 import json
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
@@ -9,8 +10,8 @@ import os
 # KONFIGURACJA ŚCIEŻEK
 # ==========================================
 # TUTAJ WPISZ ŚCIEŻKĘ DO NOWEGO PLIKU .json:
-JSON_PATH = r"checkpoints\iqn\non_local\validation_step_000500000.json" 
-OUTPUT_PDF = r"raports\IQN_heatmaps.pdf"
+JSON_PATH = r"checkpoints\iqn\non_local\steps_p2_42\final_master_eval\final_master_5000_step_004700000.json" 
+OUTPUT_PDF = r"raports\IQN_heatmaps_p2_p1_mix_precise.pdf"
 
 # Wybierz, z jakim przeciwnikiem chcesz przeanalizować grę
 OPPONENT = "phase1_mix" 
@@ -53,11 +54,10 @@ def plot_combined_street_heatmaps(json_path, output_pdf, opponent_suite):
 
     print(f"Generowanie złączonego raportu PDF ({output_pdf}) dla przeciwnika: {opponent_suite}...")
     
-    # Tworzymy dużą planszę 2x2
-    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
+    # Tworzymy dużą planszę 2x2, trochę wyższą, by zmieścić dodatkowy tekst w komórkach
+    fig, axes = plt.subplots(2, 2, figsize=(22, 16))
     axes = axes.flatten()
     
-    # Przekształcamy wewnętrzne nazwy układów na ładne tytuły z zachowaniem kolejności
     ordered_labels = [h.replace('_', ' ').title() for h in HANDS_ORDER]
 
     for idx, street in enumerate(STREETS_ORDER):
@@ -69,7 +69,6 @@ def plot_combined_street_heatmaps(json_path, output_pdf, opponent_suite):
             ax.axis('off')
             continue
 
-        # Tworzymy wstępny DataFrame
         categories = list(street_data.keys())
         matrix = pd.DataFrame(index=[c.replace('_', ' ').title() for c in categories], columns=ACTIONS_ORDER)
         
@@ -79,7 +78,7 @@ def plot_combined_street_heatmaps(json_path, output_pdf, opponent_suite):
         
         matrix = matrix.astype(float)
         
-        # Filtrujemy wiersze z samymi zerami (np. brak karety na riverze)
+        # Filtrujemy wiersze z samymi zerami
         matrix = matrix[(matrix.T != 0).any()]
         
         if matrix.empty:
@@ -87,17 +86,28 @@ def plot_combined_street_heatmaps(json_path, output_pdf, opponent_suite):
             ax.axis('off')
             continue
             
-        # Obliczamy procenty w wierszach
+        # Obliczamy procenty
         matrix_perc = matrix.div(matrix.sum(axis=1), axis=0).fillna(0) * 100
         
-        # SORTOWANIE WIERSSZY OD NAJSŁABSZEGO DO NAJSILNIEJSZEGO
-        # Wybieramy tylko te układy, które faktycznie wystąpiły na tej ulicy, ale w prawidłowej kolejności
+        # Sortowanie według siły układu (dla obu matryc, by się zgadzały)
         current_ordered_labels = [label for label in ordered_labels if label in matrix_perc.index]
         matrix_perc = matrix_perc.reindex(current_ordered_labels)
+        matrix = matrix.reindex(current_ordered_labels)
 
-        # Rysujemy Heatmapę (cmap='coolwarm', sztywne granice 0-100% dla spójności kolorów)
-        sns.heatmap(matrix_perc, annot=True, fmt=".1f", cmap="BuGn", vmin=0, vmax=100, 
-                    cbar_kws={'label': '% Częstość Akcji'}, ax=ax, linewidths=.5, annot_kws={"size": 11})
+        # Generowanie niestandardowych etykiet (Procent + Ilość wystąpień)
+        annot_array = np.empty_like(matrix_perc, dtype=object)
+        for i in range(matrix_perc.shape[0]):
+            for j in range(matrix_perc.shape[1]):
+                perc = matrix_perc.iloc[i, j]
+                count = int(matrix.iloc[i, j])
+                if count > 0:
+                    annot_array[i, j] = f"{perc:.1f}%\n(n={count})"
+                else:
+                    annot_array[i, j] = "0%"
+
+        # Rysowanie heatmapy. Zmieniamy fmt na pusty string "", bo podajemy gotowe teksty.
+        sns.heatmap(matrix_perc, annot=annot_array, fmt="", cmap="BuGn", vmin=0, vmax=100, 
+                    cbar_kws={'label': '% Częstość Akcji'}, ax=ax, linewidths=.5, annot_kws={"size": 10})
         
         ax.set_title(f"{street.upper()}", fontsize=18, fontweight='bold')
         ax.set_xlabel("Podjęta Akcja", fontsize=14)
@@ -105,12 +115,10 @@ def plot_combined_street_heatmaps(json_path, output_pdf, opponent_suite):
         ax.tick_params(axis='x', labelsize=12)
         ax.tick_params(axis='y', labelsize=12, rotation=0)
 
-    # Główny tytuł dla całego slajdu
     fig.suptitle(f"Strategia Rozgrywania Układów w Fazach Licytacji\n(Przeciwnik: {opponent_suite})", 
-                 fontsize=22, fontweight='bold', y=0.98)
+                 fontsize=24, fontweight='bold', y=0.98)
     
     plt.tight_layout()
-    # Dostosowanie marginesu górnego, żeby główny tytuł się zmieścił
     plt.subplots_adjust(top=0.90) 
     
     with PdfPages(output_pdf) as pdf:

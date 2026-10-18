@@ -13,14 +13,14 @@ $ProjectDir = Split-Path -Parent $ScriptDir
 Set-Location -Path $ProjectDir
 
 $Python = ".venv\Scripts\python.exe"
-$RunName = "overnight_sac_seed_11001"
-$Seed = 11001
+$RunName = "phase1_sac_2137"
+$Seed = 2137
 
 # 5 milionow decyzji to 500 epok (przy epoce 10 000 krokow). 
 $TotalDecisions = 5000000
 
 # Ewaluacja co 50 000 decyzji (czyli co 5 epok). 
-$EvaluationInterval = 50000
+$EvaluationInterval = 100000
 
 $NightId = Get-Date -Format "yyyyMMdd_HHmmss"
 $TerminalLogDir = "logs\sac\overnight_$NightId"
