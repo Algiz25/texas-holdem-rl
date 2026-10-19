@@ -16,10 +16,10 @@ iqn_model_path = PROJECT_ROOT / "checkpoints" / "iqn" / "REAL_BEST" / "phase_2" 
 # name: nazwa gracza wyświetlana w UI
 # seed: można podać seed dla mixed
 TABLE_CONFIG = {
-        "player_0": {"type": "dqn", "path": str(dqn_model_path), "name": "DQN"},
-        "player_1": {"type": "ppo", "path": str(ppo_model_path), "name": "PPO"},
-        "player_2": {"type": "sac", "path": str(sac_model_path), "name": "SAC"},
-        "player_3": {"type": "iqn", "path": str(iqn_model_path), "name": "IQN"}
+        "player_0": {"type": "dqn", "path": str(dqn_model_path), "name": "Player 1"},
+        "player_1": {"type": "ppo", "path": str(ppo_model_path), "name": "Player 2"},
+        "player_2": {"type": "sac", "path": str(sac_model_path), "name": "Player 3"},
+        "player_3": {"type": "iqn", "path": str(iqn_model_path), "name": "Player 4"}
     }
 
 OUTPUT_LOCATION = PROJECT_ROOT / "src" / "app" / "replay_files"

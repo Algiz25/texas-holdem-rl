@@ -28,6 +28,30 @@ PHASE2_OPPONENT_WEIGHTS = {
 }
 PHASE2_MAX_HISTORICAL_MODELS = 100
 
+# DQN korzysta z własnych profili przeciwników. Nie zmieniamy powyższych wag,
+# ponieważ są używane przez treningi PPO, SAC oraz IQN dodane na mainie.
+DQN_PHASE1_OPPONENT_WEIGHTS = {
+    "random": 0.45,
+    "passive": 0.35,
+    "mixed": 0.20,
+}
+DQN_PHASE2_OPPONENT_WEIGHTS = {
+    "historical_self": 0.40,
+    "latest_self": 0.10,
+    "mixed": 0.25,
+    "random": 0.15,
+    "passive": 0.10,
+}
+DQN_PHASE2_PPO_STYLE_OPPONENT_WEIGHTS = {
+    "historical_self": 0.40,
+    "latest_self": 0.30,
+    "mixed": 0.20,
+    "random": 0.00,
+    "passive": 0.10,
+}
+DQN_PHASE2_MAX_HISTORICAL_MODELS = 6
+DQN_PHASE2_PPO_STYLE_MAX_HISTORICAL_MODELS = 20
+
 # Rozkład akcji osobowości Mixed jest wspólny dla treningu i ewaluacji.
 # Jedno źródło zapobiega sytuacji, w której bot o tej samej nazwie zachowuje
 # się inaczej podczas zbierania doświadczeń i podczas pomiaru checkpointu.
@@ -65,30 +89,71 @@ EVAL_WORKER_TORCH_THREADS = 1
 BIG_BLIND = 2
 
 # ZMIENNE TRENINGOWE DQN
-DQN_LEARNING_RATE = 5e-5
+# Faza 1 zaczyna od większego kroku, a następnie go zmniejsza. Pozwala to
+# szybko nauczyć się podstaw bez ciągłego nadpisywania dobrej polityki pod
+# koniec długiego treningu.
+DQN_LEARNING_RATE = 1e-4
+DQN_PHASE1_LR_AFTER_500K = 5e-5
+DQN_PHASE1_LR_AFTER_2M = 2e-5
+DQN_PHASE1_LR_FIRST_BOUNDARY = 500_000
+DQN_PHASE1_LR_SECOND_BOUNDARY = 2_000_000
 DQN_GAMMA = 0.99
-DQN_TARGET_NET_UPDATE = 10000 # TODO: sprawdzić czy to dobra ilość
+DQN_TARGET_NET_UPDATE = 5_000
 DQN_HUBER_LOSS_DELTA = 1.0
+DQN_PHASE1_PLACEMENT_REWARD_WEIGHT = 0.0
 
 # epsilony
 DQN_EPS_MAX = 1.0
-DQN_PHASE1_EPS_MIN = 0.1
-DQN_PHASE1_EPS_TAU = 50_000 
+DQN_RAND_PHASE_EPS_MIN = 0.15
+DQN_PHASE1_EPS_TAU_STEPS = 1_500_000
+
+# Faza 2 startuje z wytrenowanego modelu, więc nie wraca do pełnej losowości.
+DQN_PHASE2_EPS_MAX = 0.20
+DQN_PHASE2_EPS_MIN = 0.05
+DQN_PHASE2_EPS_TAU_STEPS = 1_500_000
+DQN_PHASE2_LEARNING_RATE = 2e-5
+DQN_PHASE2_LEARNING_RATE_AFTER_1M = 1e-5
+DQN_PHASE2_LR_BOUNDARY = 1_000_000
+DQN_PHASE2_UPDATE_RATIO = 0.10
+DQN_PHASE2_BUFFER_WARMUP = 50_000
+DQN_PHASE2_HISTORY_INTERVAL_DECISIONS = 500_000
+DQN_PHASE2_EVAL_INTERVAL_DECISIONS = 250_000
+DQN_PHASE2_PLACEMENT_REWARD_WEIGHT = 0.0
+
+# Alternatywny profil self-play odtwarza proporcje ligi użyte w udanej fazie
+# drugiej PPO. Jest wybierany jawnie flagą CLI i nie zmienia ustawień PPO.
+DQN_PHASE2_PPO_STYLE_BUFFER_SIZE = 500_000
+DQN_PHASE2_PPO_STYLE_UPDATE_RATIO = 0.15
+DQN_PHASE2_PPO_STYLE_LEARNING_RATE = 5e-5
+DQN_PHASE2_PPO_STYLE_LEARNING_RATE_AFTER_BOUNDARY = 2e-5
+DQN_PHASE2_PPO_STYLE_LR_BOUNDARY = 5_000_000
+DQN_PHASE2_PPO_STYLE_HISTORY_INTERVAL_DECISIONS = 100_000
+DQN_PHASE2_PPO_STYLE_OPPONENT_EPSILON = 0.05
 
 # bufor
-DQN_BUFFER_SIZE = 500_000
-DQN_BUFFER_WARMUP = 10_000
-DQN_BATCH_SIZE = 512
-DQN_UPDATE_RATIO = 0.5
-DQN_NUM_TRAIN_ENVS = 4
+DQN_BUFFER_SIZE = 1_000_000
+DQN_BUFFER_WARMUP = 25_000
+DQN_BATCH_SIZE = 64
+DQN_UPDATE_RATIO = 0.25
+DQN_PHASE1_UPDATE_RATIO_AFTER_500K = 0.15
+DQN_PHASE1_UPDATE_RATIO_AFTER_2M = 0.10
+DQN_PHASE1_UPDATE_FIRST_BOUNDARY = 500_000
+DQN_PHASE1_UPDATE_SECOND_BOUNDARY = 2_000_000
+DQN_TENSORBOARD_UPDATE_INTERVAL = 1
+DQN_NUM_TRAIN_ENVS = 8
 DQN_NUM_TEST_ENVS = 1
 
 DQN_MAX_EPOCHS = 25
 DQN_STEPS_PER_EPOCH = 10_000
 DQN_COLLECTION_STEPS = 1_000
 
-DQN_EVAL_INTERVAL_DECISIONS = 50_000
-DQN_FULL_STATE_INTERVAL_DECISIONS = 100_000
+DQN_EVAL_INTERVAL_DECISIONS = 25_000
+DQN_FULL_STATE_INTERVAL_DECISIONS = 250_000
+
+# DQN używa większych prób niż domyślne testy innych algorytmów. Walidacja
+# wybiera checkpoint, a końcowe 1000 turniejów daje węższe przedziały ufności.
+DQN_EVAL_TOURNAMENTS_PER_SUITE = 300
+DQN_FINAL_EVAL_TOURNAMENTS_PER_SUITE = 1_000
 
 # ZMIENNE TRENINGOWE PPO
 if TRAINING_PHASE == 1:
@@ -212,4 +277,3 @@ else:
 
 EVAL_MAX_HANDS_PER_MATCH = 100
 EVAL_MAX_ACTIONS_PER_MATCH = 5_000
-

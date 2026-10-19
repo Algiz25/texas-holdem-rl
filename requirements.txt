@@ -2,6 +2,7 @@ gymnasium
 numpy
 pettingzoo
 rlcard
+streamlit
 tianshou
 tensorboard
 torch

@@ -26,11 +26,23 @@ action_mapping = {
 }
 
 class TexasHoldemTournament(AECEnv):
-    def __init__(self, num_players=config.NUM_PLAYERS, starting_chips=config.STARTING_CHIPS, debug=False):
+    def __init__(
+        self,
+        num_players=config.NUM_PLAYERS,
+        starting_chips=config.STARTING_CHIPS,
+        debug=False,
+        placement_reward_weight: float = 1.0,
+    ):
         super().__init__()
         self.num_players = num_players
         self.starting_chips = starting_chips
         self.debug = debug
+        if placement_reward_weight < 0.0:
+            raise ValueError("Waga nagrody za miejsce nie może być ujemna")
+        # Waga należy do konkretnej instancji środowiska. Dzięki temu DQN może
+        # trenować wyłącznie na zmianie żetonów, a istniejące treningi kolegi
+        # nadal otrzymują domyślną premię za zajęte miejsce.
+        self.placement_reward_weight = float(placement_reward_weight)
         # Identyfikator instancji odróżnia równoległe środowiska. Polityki
         # przeciwników łączą go z numerem resetu, aby zachować wylosowany styl
         # przez cały jeden turniej, bez mieszania ośmiu procesów treningowych.
@@ -438,7 +450,11 @@ class TexasHoldemTournament(AECEnv):
                     # 4. miejsce -> -3.0
                     # 3. miejsce -> -1.0
                     # 2. miejsce -> +1.0
-                    placement_reward = (2.5 - tied_position) * 2.0
+                    placement_reward = (
+                        self.placement_reward_weight
+                        * (2.5 - tied_position)
+                        * 2.0
+                    )
                     self.rewards[agent] += placement_reward
                     
             if active_count <= 1:
@@ -448,7 +464,11 @@ class TexasHoldemTournament(AECEnv):
 
                 # DODANE: Główna nagroda za wygranie turnieju
                 # 1. miejsce -> +3.0
-                placement_reward = (2.5 - 1.0) * 2.0
+                placement_reward = (
+                    self.placement_reward_weight
+                    * (2.5 - 1.0)
+                    * 2.0
+                )
                 self.rewards[winner] += placement_reward
 
                 for agent in self.agents:

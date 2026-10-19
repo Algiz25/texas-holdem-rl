@@ -8,7 +8,8 @@ import config
 class DQNEvaluator(BasePokerEvaluator):
     algorithm_name = "dqn"
 
-    def load_policy(self):
+    def load_policy(self, path=None):
+        model_path = path or self.model_path
         net = MaskedActor(state_shape=config.OBSERVATION_SIZE, action_shape=config.ACTION_SPACE).to(self.device)
         policy = DiscreteQLearningPolicy(
             model=net,
@@ -18,16 +19,16 @@ class DQNEvaluator(BasePokerEvaluator):
         )
         
         try:
-            policy.load_state_dict(torch.load(self.model_path, map_location=self.device, weights_only=True))
-            print(f"Załadowano model DQN: {self.model_path}")
+            policy.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
+            print(f"Załadowano model DQN: {model_path}")
             policy.eval()
             return policy
         except FileNotFoundError:
-            print(f"BŁĄD: Nie znaleziono pliku {self.model_path}.")
+            print(f"BŁĄD: Nie znaleziono pliku {model_path}.")
             return None
         except RuntimeError as error:
             print(
-                f"BŁĄD: Checkpoint {self.model_path} nie pasuje do aktualnej "
+                f"BŁĄD: Checkpoint {model_path} nie pasuje do aktualnej "
                 f"architektury ({config.OBSERVATION_SIZE} obserwacje): {error}"
             )
             return None

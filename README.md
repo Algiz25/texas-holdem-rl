@@ -50,7 +50,7 @@ Agent ma dostęp do bogatego wektora stanu gry, który naśladuje informacje dos
 
 ## Funkcja Nagrody
 
-System wykorzystuje hybrydową funkcję nagrody, łączącą gęste sygnały (dense rewards) po każdym rozdaniu z rzadkimi sygnałami (sparse rewards) na koniec gry. Zachęca to agenta zarówno do optymalizacji pojedynczych rozdań, jak i do walki o przetrwanie i wygranie całego turnieju.
+System pozwala łączyć gęste sygnały (dense rewards) po każdym rozdaniu z rzadkimi sygnałami (sparse rewards) na koniec gry. W stabilnym profilu DQN fazy 1 premia za miejsce jest wyłączona (`placement_reward_weight=0`), aby cel treningu odpowiadał metryce żetonowej bb/100. Pozostałe treningi zachowują dotychczasową wartość domyślną `1`.
 
 Nagroda dla agenta składa się z dwóch elementów:
 
@@ -96,12 +96,25 @@ Wgląd w metryki treningowe odbywa się przez TensorBoard:
 tensorboard --logdir logs/
 ```
 
+Dla DQN dostępne są osobne, bezpiecznie wznawialne profile na macOS:
+
+```bash
+./scripts/run_dqn_phase1_chip_only_macbook.sh
+./scripts/run_dqn_selfplay_macbook.sh
+./scripts/run_dqn_selfplay_ppo_style_macbook.sh
+```
+
+Skrypty self-play korzystają z istniejącego modelu
+`checkpoints/dqn/REAL_BEST/phase_2/step_010500000.pth`; nie wymagają drugiej
+kopii wag w repozytorium. `Ctrl+C` zapisuje stan runu, a ponowne wywołanie tej
+samej komendy kontynuuje trening.
+
 ## Ewaluacja
 
 Mechanizm walidacyjny wyodrębniono do osobnych procesów. Końcowy raport nie zależy od funkcji uczących, a wskaźniki (np. `bb/100`) są wiarygodne, ponieważ sprawdzane były na wyizolowanych seedach.
 Walidacja odbywa się podczas treningu w zależności od parametrów w `config.py`.
 
-Raporty generują pliki szczegółowe JSON oraz plik zbiorczy `evaluations_v2.csv` wewnątrz folderu `checkpoints/<algorytm>/evaluations` oraz zapisują wagi modelu testowanego w `checkpoints/<algorytm>`.
+Raporty generują szczegółowe pliki JSON z małą próbką każdego turnieju oraz plik zbiorczy `evaluations_v3.csv` wewnątrz folderu `checkpoints/<algorytm>/evaluations`. Próbki pozwalają po treningu policzyć przedziały ufności bez zapisywania pełnego przebiegu każdej gry. Dla zgodności z dotychczasowymi narzędziami tworzony jest również indeks `evaluations_v2.csv`.
 
 ## Generator Powtórek i Interfejs UI
 

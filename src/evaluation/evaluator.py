@@ -99,6 +99,26 @@ def _evaluate_suite_worker_unpack(arguments) -> tuple[str, "EvaluationResult"]:
 
 
 @dataclass
+class TournamentSample:
+    """Surowy wynik jednego meczu potrzebny do późniejszej analizy statystycznej.
+
+    Zapisujemy mały rekord zamiast całego przebiegu gry. Dzięki temu można
+    policzyć bootstrapowe przedziały ufności i porównywać checkpointy na tych
+    samych seedach, nie tworząc wielkich logów każdej pojedynczej akcji.
+    """
+
+    seed: int
+    learner_seat: int
+    hands: int
+    chip_delta: float
+    won: bool
+    resolved: bool
+    learner_eliminated: bool
+    finish: float | None
+    stop_reason: str
+
+
+@dataclass
 class EvaluationResult:
     """Podsumowanie jednego checkpointu przeciwko jednemu zestawowi botów."""
 
@@ -109,6 +129,8 @@ class EvaluationResult:
     seed_base: int
     tournaments: int
     completed_tournaments: int
+    resolved_tournaments: int
+    learner_eliminations: int
     hand_limited_matches: int
     action_limited_matches: int
     truncated_tournaments: int
@@ -132,13 +154,20 @@ class EvaluationResult:
     action_rates: dict[str, float] = field(default_factory=dict)
     actions_by_street: dict[str, dict[str, int]] = field(default_factory=dict)
     actions_by_hand_category: dict[str, dict[str, int]] = field(default_factory=dict)
+    tournament_samples: list[TournamentSample] = field(default_factory=list)
 
     def csv_row(self) -> dict[str, Any]:
         """Spłaszcz najważniejsze metryki do formatu wygodnego dla arkusza."""
         row = {
             key: value
             for key, value in asdict(self).items()
-            if key not in {"action_rates", "actions_by_street", "actions_by_hand_category"}
+            if key
+            not in {
+                "action_rates",
+                "actions_by_street",
+                "actions_by_hand_category",
+                "tournament_samples",
+            }
         }
         for action_name in ("fold", "check", "call", "raise_half", "raise_pot", "all_in"):
             row[f"{action_name}_rate"] = self.action_rates.get(action_name, 0.0)
@@ -150,6 +179,8 @@ class EvaluationAccumulator:
 
     def __init__(self) -> None:
         self.completed_tournaments = 0
+        self.resolved_tournaments = 0
+        self.learner_eliminations = 0
         self.hand_limited_matches = 0
         self.action_limited_matches = 0
         self.truncated_tournaments = 0
@@ -168,6 +199,7 @@ class EvaluationAccumulator:
         self.pfr_hands = 0
         self.showdowns = 0
         self.showdown_wins = 0
+        self.tournament_samples: list[TournamentSample] = []
 
     def record_action(self, observation: np.ndarray, action: int, legal: bool) -> None:
         self.decisions += 1
@@ -201,6 +233,8 @@ class EvaluationAccumulator:
         learner: str,
         *,
         stop_reason: str,
+        tournament_seed: int = 0,
+        learner_seat: int = 0,
     ) -> None:
         if stop_reason == "completed":
             self.completed_tournaments += 1
@@ -216,15 +250,60 @@ class EvaluationAccumulator:
         player_stats = env.opponent_stats.players[learner]
         # Po odpadnięciu ucznia turniej może trwać dalej. Do bb/100 liczymy
         # wyłącznie rozdania, w których badany gracz faktycznie uczestniczył.
-        self.hands += player_stats.observed_hands
+        hands = int(player_stats.observed_hands)
+        self.hands += hands
         self.hand_wins += env.hand_wins[learner]
 
         chip_delta = float(env.tournament_chips[learner] - env.starting_chips)
+        # Eliminacja ucznia jest rozstrzygnięciem nawet wtedy, gdy limit stu
+        # rozdań zatrzymuje dalszą część turnieju. Poprzednia wersja wyrzucała
+        # takie porażki z mianownika win rate, przez co np. 87 zwycięstw i 135
+        # eliminacji mogło wyglądać jak 53%, zamiast uczciwego 29%.
+        learner_eliminated = bool(
+            getattr(env, "terminations", {}).get(learner, False)
+            or env.tournament_chips[learner] <= 0
+        )
+        resolved = completed or learner_eliminated
+        if resolved:
+            self.resolved_tournaments += 1
+        if learner_eliminated:
+            self.learner_eliminations += 1
+
+        # Wartości żetonów w środowisku mogą być skalarami NumPy. Ich
+        # porównanie zwraca wtedy ``numpy.bool_``, którego standardowy encoder
+        # JSON nie obsługuje, dlatego zapisujemy jawny, wbudowany ``bool``.
+        won = bool(
+            completed
+            and not learner_eliminated
+            and env.tournament_chips[learner] == max(env.tournament_chips.values())
+        )
+        finish = (
+            float(env.finishing_positions[learner])
+            if resolved and learner in env.finishing_positions
+            else None
+        )
         self.chip_deltas.append(chip_delta)
-        if completed and env.tournament_chips[learner] == max(env.tournament_chips.values()):
+        if won:
             self.tournament_wins += 1
-        if completed:
-            self.finishing_positions.append(env.finishing_positions[learner])
+        if finish is not None:
+            self.finishing_positions.append(finish)
+
+        # Ten kompaktowy rekord wystarcza do bootstrapu, błędu standardowego
+        # i testów parowanych. Nie zapisujemy kart ani akcji, więc raport rośnie
+        # o zaledwie kilkaset bajtów na turniej, a nie o rozmiar pełnego replaya.
+        self.tournament_samples.append(
+            TournamentSample(
+                seed=tournament_seed,
+                learner_seat=learner_seat,
+                hands=hands,
+                chip_delta=chip_delta,
+                won=won,
+                resolved=resolved,
+                learner_eliminated=learner_eliminated,
+                finish=finish,
+                stop_reason=stop_reason,
+            )
+        )
 
         # Tracker środowiska liczy VPIP poprawnie: blind i darmowy check nie są
         # dobrowolnym wejściem do puli.
@@ -265,6 +344,8 @@ class EvaluationAccumulator:
             seed_base=seed_base,
             tournaments=tournaments,
             completed_tournaments=self.completed_tournaments,
+            resolved_tournaments=self.resolved_tournaments,
+            learner_eliminations=self.learner_eliminations,
             hand_limited_matches=self.hand_limited_matches,
             action_limited_matches=self.action_limited_matches,
             truncated_tournaments=self.truncated_tournaments,
@@ -281,7 +362,7 @@ class EvaluationAccumulator:
             ),
             tournament_win_rate=_safe_ratio(
                 self.tournament_wins,
-                self.completed_tournaments,
+                self.resolved_tournaments,
             ),
             average_finish=(
                 float(np.mean(self.finishing_positions))
@@ -298,6 +379,7 @@ class EvaluationAccumulator:
             action_rates=action_rates,
             actions_by_street=_nested_counters_to_dict(self.actions_by_street),
             actions_by_hand_category=_nested_counters_to_dict(self.actions_by_category),
+            tournament_samples=list(self.tournament_samples),
         )
 
 
@@ -424,7 +506,7 @@ class BasePokerEvaluator:
             self._save_report(results, stage=stage, step=step)
         self._print_results(results)
         if save_report:
-            print(f"Raporty: {self.report_dir / 'evaluations_v2.csv'}\n")
+            print(f"Raporty: {self.report_dir / 'evaluations_v3.csv'}\n")
         return results
 
     def _evaluate_suite(
@@ -499,6 +581,8 @@ class BasePokerEvaluator:
                 self.env,
                 learner,
                 stop_reason=stop_reason,
+                tournament_seed=tournament_seed,
+                learner_seat=tournament_index % config.NUM_PLAYERS,
             )
 
         return accumulator.finish(
@@ -586,10 +670,27 @@ class BasePokerEvaluator:
         step: int,
     ) -> None:
         self.report_dir.mkdir(parents=True, exist_ok=True)
-        # Druga wersja raportu rozróżnia prawidłowe zakończenie po limicie
-        # rozdań od awaryjnego limitu akcji. Nie dopisujemy nowych kolumn do
-        # starego CSV, bo powstałby plik z niezgodnym nagłówkiem.
-        csv_path = self.report_dir / "evaluations_v2.csv"
+        # JSON zachowuje szczegółowe rozkłady oraz kompaktową próbkę każdego
+        # turnieju. Najpierw zapisujemy plik tymczasowy, a dopiero kompletny
+        # raport podmieniamy atomowo. Awaria serializacji nie pozostawi już
+        # uciętego pliku wyglądającego jak prawidłowy wynik ewaluacji.
+        json_path = self.report_dir / f"{stage}_step_{step:09d}.json"
+        temporary_json_path = json_path.with_suffix(json_path.suffix + ".tmp")
+        with temporary_json_path.open("w", encoding="utf-8") as json_file:
+            json.dump(
+                {suite: asdict(result) for suite, result in results.items()},
+                json_file,
+                ensure_ascii=False,
+                indent=2,
+            )
+        temporary_json_path.replace(json_path)
+
+        # CSV zapisujemy dopiero po udanym JSON-ie. Dzięki temu oba raporty
+        # opisują ten sam kompletny pomiar. Nie umieszczamy w nim listy próbek,
+        # więc pozostaje mały i zawiera jeden wiersz na zestaw przeciwników.
+        # Nowy plik ma inną definicję win rate niż `evaluations_v2.csv`. Osobna
+        # wersja nie miesza starych, zawyżonych wyników z poprawionymi.
+        csv_path = self.report_dir / "evaluations_v3.csv"
         rows = [result.csv_row() for result in results.values()]
         write_header = not csv_path.exists()
         with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
@@ -598,34 +699,36 @@ class BasePokerEvaluator:
                 writer.writeheader()
             writer.writerows(rows)
 
-        # JSON zachowuje szczegółowe rozkłady ulic i kategorii układu, których
-        # nie warto rozpychać na dziesiątki kolumn w głównym pliku CSV.
-        json_path = self.report_dir / f"{stage}_step_{step:09d}.json"
-        with json_path.open("w", encoding="utf-8") as json_file:
-            json.dump(
-                {suite: asdict(result) for suite, result in results.items()},
-                json_file,
-                ensure_ascii=False,
-                indent=2,
-            )
+        # Zachowujemy nazwę używaną przez istniejącą infrastrukturę maina.
+        # Nowe analizy powinny korzystać z v3, ponieważ ma poprawiony mianownik
+        # win rate; plik v2 jest wyłącznie kompatybilnym indeksem tych samych
+        # nowych wierszy dla dotychczasowych skryptów i testów.
+        legacy_csv_path = self.report_dir / "evaluations_v2.csv"
+        legacy_write_header = not legacy_csv_path.exists()
+        with legacy_csv_path.open("a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=list(rows[0]))
+            if legacy_write_header:
+                writer.writeheader()
+            writer.writerows(rows)
 
     @staticmethod
     def _print_results(results: dict[str, EvaluationResult]) -> None:
         print("\n=== WYNIKI EWALUACJI ===")
         for suite, result in results.items():
-            # Win-rate turniejowy nie istnieje, jeśli wszystkie mecze zostały
-            # planowo zakończone po 100 rozdaniach. Pokazanie 0% sugerowałoby
-            # przegraną, dlatego w terminalu wyświetlamy wtedy "n/d".
+            # Win rate istnieje dla ukończonych turniejów oraz dla każdej
+            # eliminacji ucznia. Gdy limit zatrzymał wyłącznie nierozstrzygnięte
+            # stoły, uczciwie raportujemy "n/d" zamiast sztucznego zera.
             tournament_win_rate = (
                 f"{result.tournament_win_rate:6.1%}"
-                if result.completed_tournaments
+                if result.resolved_tournaments
                 else "   n/d"
             )
             print(
                 f"{suite:12s} | {result.bb_per_100:8.2f} bb/100 | "
                 f"turnieje {tournament_win_rate} | "
                 f"ręce {result.hands:5d} | decyzje {result.decisions:6d} | "
-                f"pełne/100-rąk/awarie "
+                f"rozstrzygnięte/pełne/100-rąk/awarie "
+                f"{result.resolved_tournaments}/"
                 f"{result.completed_tournaments}/"
                 f"{result.hand_limited_matches}/"
                 f"{result.action_limited_matches}"
